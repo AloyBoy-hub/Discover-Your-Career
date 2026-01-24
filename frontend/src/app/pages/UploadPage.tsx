@@ -56,16 +56,59 @@ export function UploadPage() {
   };
 
   const handleAnalyze = async () => {
+    if (!file) {
+      alert("Please upload a file first.");
+      return;
+    }
+
     setLoading(true);
-    // Simulate processing
-    await new Promise(resolve => setTimeout(resolve, 1500));
 
-    // Store data in sessionStorage for the results page
-    sessionStorage.setItem('cvData', cvText);
-    sessionStorage.setItem('preferences', JSON.stringify(preferences));
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('resume_text', '');
+      formData.append('top_k_retrieve', '200');
+      formData.append('use_llm_rerank', 'true');
 
-    setLoading(false);
-    navigate('/results');
+      // Add preferences as extra info for LLM reranker
+      const extraInfo = `
+        Industry: ${preferences.industry}
+        Prefer Country: ${preferences.country}
+        Region: ${preferences.region}
+        Location: ${preferences.location}
+        Role Types: ${preferences.roleType.join(', ')}
+        Tech Stack Interests: ${preferences.techStack.join(', ')}
+        Confident Skills: ${preferences.confidentSkills.join(', ')}
+      `;
+      formData.append('extra_info', extraInfo);
+
+      // Call Backend
+      const response = await fetch('http://localhost:8000/recommend', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.detail || 'Analysis failed');
+      }
+
+      const data = await response.json();
+      console.log("Analysis Result:", data);
+
+      // Store results in sessionStorage
+      sessionStorage.setItem('cvData', `File: ${file.name}`); // Display name
+      sessionStorage.setItem('recommendationResults', JSON.stringify(data));
+      sessionStorage.setItem('preferences', JSON.stringify(preferences));
+
+      setLoading(false);
+      navigate('/results');
+
+    } catch (error: any) {
+      console.error("Error analyzing:", error);
+      alert(`Error: ${error.message}`);
+      setLoading(false);
+    }
   };
 
   return (
