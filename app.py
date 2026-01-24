@@ -285,14 +285,20 @@ async def lifespan(app: FastAPI):
     global feature_columns, feat_dim, tower, reranker, tokenizer
     global CFG, MAX_LEN
 
-    CFG = load_json(DEPLOY_CFG_PATH)
-    MAX_LEN = int(CFG["max_len"])
+    # Load Config and Tokenizer
+    try:
+        CFG = load_json(DEPLOY_CFG_PATH)
+        MAX_LEN = int(CFG["max_len"])
 
-    tok_dir = os.path.join(ART_DIR, CFG["tokenizer_dir"])
-    tokenizer = AutoTokenizer.from_pretrained(tok_dir, use_fast=True)
+        tok_dir = os.path.join(ART_DIR, CFG["tokenizer_dir"])
+        tokenizer = AutoTokenizer.from_pretrained(tok_dir, use_fast=True)
 
-    feature_columns = CFG["feature_columns"]
-    feat_dim = len(feature_columns)
+        feature_columns = CFG["feature_columns"]
+        feat_dim = len(feature_columns)
+    except Exception as e:
+        print(f"ERROR loading config/tokenizer: {e}")
+        # Proceeding is hard without config, but let's try to survive if we can just mock
+        pass
 
     jobs_df = pd.read_csv(JOBS_CSV)
     job_ids = jobs_df["job_id"].astype(str).tolist()
@@ -300,86 +306,61 @@ async def lifespan(app: FastAPI):
     job_texts = jobs_df["job_text"].astype(str).tolist()
     job_snippets = [make_snippet(t, LLM_SNIPPET_CHARS) for t in job_texts]
 
-    tower = TwoTower(
-        model_name=CFG["model_name"],
-        emb_dim=CFG["tower"]["emb_dim"],
-        cand_feat_dim=CFG["tower"]["cand_feat_dim"],
-    ).to(DEVICE)
-    tower.load_state_dict(
-        torch.load(os.path.join(ART_DIR, CFG["tower"]["weights"]), map_location=DEVICE, weights_only=True)
-    )
-    tower.eval()
-
-    reranker = Reranker(
-        emb_dim=CFG["reranker"]["emb_dim"],
-        hidden=CFG["reranker"]["hidden"],
-        dropout=CFG["reranker"]["dropout"],
-    ).to(DEVICE)
-    reranker.load_state_dict(
-        torch.load(os.path.join(ART_DIR, CFG["reranker"]["weights"]), map_location=DEVICE, weights_only=True)
-    )
-    reranker.eval()
-
-    job_emb = load_npy(os.path.join(ART_DIR, CFG["job_emb_path"]))
-    if os.path.exists(JOBS_CSV):
-        jobs_df = pd.read_csv(JOBS_CSV)
-        job_ids = jobs_df["job_id"].astype(str).tolist()
-        job_titles = (
-            jobs_df["title"].astype(str).tolist()
-            if "title" in jobs_df.columns
-            else [""] * len(job_ids)
-        )
-        job_texts = jobs_df["job_text"].astype(str).tolist()
-        job_snippets = [make_snippet(t, LLM_SNIPPET_CHARS) for t in job_texts]
-    else:
-        print(f"WARNING: {JOBS_CSV} not found. Running with empty job database.")
-        jobs_df = pd.DataFrame() # dummy
-        job_ids = []
-        job_titles = []
-        job_texts = []
-        job_snippets = []
-
-    if os.path.exists(CAND_FEAT_CSV):
-        feat_df = pd.read_csv(CAND_FEAT_CSV)
-        feature_columns = [c for c in feat_df.columns if c != "candidate_id"]
-        feat_dim = len(feature_columns)
-    else:
-        print(f"WARNING: {CAND_FEAT_CSV} not found. Using default feature dimension 0.")
-        feature_columns = []
-        feat_dim = 0
-        
-    # --- Load Models (Robust) ---
+    # Two Tower
     try:
-        if os.path.exists(TOWER_WEIGHTS):
-            tower = TwoTower(model_name=MODEL_NAME, emb_dim=256, cand_feat_dim=feat_dim).to(DEVICE)
-            tower.load_state_dict(torch.load(TOWER_WEIGHTS, map_location=DEVICE, weights_only=True))
-            tower.eval()
+        tower = TwoTower(
+            model_name=CFG["model_name"],
+            emb_dim=CFG["tower"]["emb_dim"],
+            cand_feat_dim=CFG["tower"]["cand_feat_dim"],
+        ).to(DEVICE)
+        
+        tower_path = os.path.join(ART_DIR, CFG["tower"]["weights"])
+        if os.path.exists(tower_path):
+             tower.load_state_dict(
+                torch.load(tower_path, map_location=DEVICE, weights_only=True)
+             )
+             tower.eval()
+             print("[startup] TwoTower loaded.")
         else:
-             print(f"WARNING: {TOWER_WEIGHTS} not found. TwoTower model will not be loaded.")
+             print(f"[startup] WARNING: {tower_path} not found. TwoTower disabled.")
              tower = None
     except Exception as e:
-        print(f"ERROR loading TwoTower: {e}")
+        print(f"[startup] ERROR loading TwoTower: {e}")
         tower = None
 
+    # Reranker
     try:
-        if os.path.exists(RERANK_WEIGHTS):
-            reranker = Reranker(emb_dim=256, hidden=256, dropout=0.2).to(DEVICE)
-            reranker.load_state_dict(torch.load(RERANK_WEIGHTS, map_location=DEVICE, weights_only=True))
+        reranker = Reranker(
+            emb_dim=CFG["reranker"]["emb_dim"],
+            hidden=CFG["reranker"]["hidden"],
+            dropout=CFG["reranker"]["dropout"],
+        ).to(DEVICE)
+        
+        reranker_path = os.path.join(ART_DIR, CFG["reranker"]["weights"])
+        if os.path.exists(reranker_path):
+            reranker.load_state_dict(
+                torch.load(reranker_path, map_location=DEVICE, weights_only=True)
+            )
             reranker.eval()
+            print("[startup] Reranker loaded.")
         else:
-            print(f"WARNING: {RERANK_WEIGHTS} not found. Reranker model will not be loaded.")
+            print(f"[startup] WARNING: {reranker_path} not found. Reranker disabled.")
             reranker = None
     except Exception as e:
-        print(f"ERROR loading Reranker: {e}")
+        print(f"[startup] ERROR loading Reranker: {e}")
         reranker = None
 
-    # Encode jobs if tower exists
-    if tower is not None and len(job_texts) > 0:
-        print("Encoding job embeddings...")
-        job_emb = encode_job_embeddings(tokenizer, tower, job_texts, device=DEVICE)
-        print(f"[startup] DEVICE={DEVICE} jobs={len(job_ids)} job_emb={job_emb.shape}")
-    else:
-        print("WARNING: Skipping job embedding generation (no tower or no jobs).")
+    # Job Embeddings
+    try:
+        job_emb_path = os.path.join(ART_DIR, CFG["job_emb_path"])
+        if os.path.exists(job_emb_path):
+            job_emb = load_npy(job_emb_path)
+            print("[startup] Job embeddings loaded.")
+        else:
+            print(f"[startup] WARNING: {job_emb_path} not found. Job embeddings disabled.")
+            job_emb = None
+    except Exception as e:
+        print(f"[startup] ERROR loading job embeddings: {e}")
         job_emb = None
 
     yield
@@ -401,244 +382,222 @@ app.add_middleware(
 )
 
 
+# ============================================================
+# Endpoints
+# ============================================================
+
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Go to /docs and use POST /recommend"}
+    return {"status": "ok", "message": "Go to /docs and use POST /recommend or POST /parse_cv"}
+
+
+@app.post("/parse_cv")
+async def parse_cv(file: UploadFile = File(...)):
+    """
+    Parses a resume file (PDF/DOCX/TXT) and returns the extracted text.
+    Used by the frontend to get the text before the survey.
+    """
+    # Save temp file
+    suffix = os.path.splitext(file.filename)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+
+    try:
+        parsed_data = parse_resume(tmp_path)
+        final_text = parsed_data.get("raw_text", "") if parsed_data else ""
+        return {"text": final_text, "filename": file.filename}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to parse resume: {str(e)}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+class JobResult(BaseModel):
+    id: str
+    title: str
+    company: str
+    location: str
+    salaryRange: str
+    description: str
+    matchScore: float  # 0-100
+    skillsRequired: List[str]
+
+
+class RecommendResponse(BaseModel):
+    # Old fields for backward compat or debugging
+    top10: List[Tuple[str, str, float]]
+    ranked_job_ids: List[str]
+    relative_matrix: List[List[float]]
+    
+    # Rich results for frontend
+    results: List[JobResult]
+    
+    # Metadata
+    device: str
+    llm_used: bool = False
+    llm_notes: str = ""
 
 
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(req: RecommendRequest):
     if tower is None or reranker is None or job_emb is None or tokenizer is None:
+        # Mock mode if requested or environment allows, otherwise 503
+        if os.getenv("ALLOW_MOCK_RESPONSE", "0") == "1":
+             # Return dummy response
+             return RecommendResponse(
+                 top10=[], ranked_job_ids=[], relative_matrix=[], results=[],
+                 device="mock", llm_used=False, llm_notes="Mock mode"
+             )
         raise HTTPException(status_code=503, detail="Models not loaded yet.")
 
-    # Candidate feature vector
-    if req.features_override is not None:
-        if len(req.features_override) != feat_dim:
-            raise HTTPException(status_code=400, detail=f"features_override length must be {feat_dim}")
-        cand_feat_vec = np.array(req.features_override, dtype=np.float32)
-async def recommend(
-    # Option 1: File upload
-    file: Optional[UploadFile] = File(None),
-    # Option 2: JSON-like fields via Form (since we have a file, everything must be Form)
-    resume_text: Optional[str] = Form(None),
-    top_k_retrieve: int = Form(TOPK_RETRIEVE_DEFAULT),
-    extra_info: Optional[str] = Form(None),
-    use_llm_rerank: bool = Form(True),
-    # For features_override, passing JSON string in Form is easiest, or list of queries
-    # Simple fix: accept a JSON string for overrides if needed
-    features_override_json: Optional[str] = Form(None)
-):
-    """
-    Hybrid endpoint:
-    - If `file` is uploaded (PDF/TXT), we parse it.
-    - If `resume_text` is provided directly, we use that.
-    
-    Returns standard RecommendResponse.
-    """
-    if tower is None or reranker is None or job_emb is None:
-        # For testing frontend connection without models, return a Mock response if permitted
-        # Or just error out. Let's error out but with a clear message.
-        # ALLOW_MOCK for demo purposes if env var set?
-        if os.getenv("ALLOW_MOCK_RESPONSE", "0") == "1":
-             return RecommendResponse(
-                top10=[],
-                relative_matrix=[],
-                device=DEVICE,
-                llm_used=False,
-                llm_notes="Models not loaded. Mock response enabled."
-            )
-        raise HTTPException(status_code=503, detail="Models not loaded yet (missing .pt files).")
-
-    # 1. Parse Input
-    final_resume_text = ""
-    
-    if file:
-        # Save temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            tmp_path = tmp.name
-        
-        try:
-            parsed_data = parse_resume(tmp_path)
-            if parsed_data:
-                # Combine extracted fields into a rich text for embedding
-                # This logic depends on what your model expects. 
-                # If model expects raw text, use parsed_data['raw_text']
-                final_resume_text = parsed_data.get('raw_text', '')
-            else:
-                final_resume_text = ""
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    
-    elif resume_text:
-        final_resume_text = resume_text
-    else:
-        raise HTTPException(status_code=400, detail="Must provide either 'file' or 'resume_text'.")
-
-    # 2. Features Override
+    # 1. Feature Vector
     cand_feat_vec = None
-    if features_override_json:
-        try:
-            overrides = json.loads(features_override_json)
-            if isinstance(overrides, list) and len(overrides) == feat_dim:
-                cand_feat_vec = np.array(overrides, dtype=np.float32)
-        except:
-             pass # ignore invalid json
-
-    # 3. Default Features
+    if req.features_override:
+         if len(req.features_override) == feat_dim:
+             cand_feat_vec = np.array(req.features_override, dtype=np.float32)
+    
     if cand_feat_vec is None:
-        cand_feat_vec = build_feature_vector(final_resume_text, feature_columns)
+        cand_feat_vec = build_feature_vector(req.resume_text, feature_columns)
 
-    # Candidate embedding
-    cand_emb = encode_candidate_embedding(tokenizer, tower, req.resume_text, cand_feat_vec, DEVICE, max_len=MAX_LEN)
-    # --- candidate embedding ---
-    cand_emb = encode_candidate_embedding(tokenizer, tower, final_resume_text, cand_feat_vec, DEVICE)
+    # 2. Candidate Embedding (Stage A)
+    cand_emb = encode_candidate_embedding(
+        tokenizer, tower, req.resume_text, cand_feat_vec, DEVICE, max_len=MAX_LEN
+    )
 
-    # Retrieve top-K by dot product (TwoTower)
+    # 3. Retrieve Top-K (Dot Product)
     scores = job_emb @ cand_emb.detach().cpu().numpy()
-    K = min(top_k_retrieve, len(scores))
-
+    K = min(req.top_k_retrieve, len(scores))
     topk_idx = np.argpartition(scores, -K)[-K:]
     topk_idx = topk_idx[np.argsort(scores[topk_idx])[::-1]]
 
-    # Rerank top-K (Reranker) => probabilities
+    # 4. Rerank Top-K (Stage B - Model)
     job_emb_topk = torch.from_numpy(job_emb[topk_idx]).to(DEVICE).float()
-    p_hired = rerank_probs(reranker, cand_emb, job_emb_topk)  # [K]
+    p_hired = rerank_probs(reranker, cand_emb, job_emb_topk)
 
-    # NN top-10 (always available)
+    # 5. NN Top-10 Selection
+    # Get indices in the topk_idx array
     nn_order = np.argsort(p_hired)[::-1][:10]
-    top10: List[Tuple[str, str, float]] = []
-    ranked_job_ids: List[str] = []
-    nn_scores_10: List[float] = []
-    for o in nn_order:
-        j = int(topk_idx[o])
-        prob = float(p_hired[o])
-        top10.append((job_ids[j], job_titles[j], prob))
-        ranked_job_ids.append(job_ids[j])
-        nn_scores_10.append(prob)
-
-    # Default (no-LLM) fields — ALWAYS returned
-    empty_violations = [[] for _ in range(10)]
-    empty_reasons = ["" for _ in range(10)]
-    rel_matrix = upper_triangle_abs_diff(nn_scores_10)
-
-    # Decide if we will call LLM
-    use_llm = bool(req.use_llm_rerank) and bool(req.extra_info and req.extra_info.strip())
-    def nn_only_top10() -> Tuple[List[Tuple[str, str, float]], List[float]]:
-        order = np.argsort(p_hired)[::-1][:10]
-        out: List[Tuple[str, str, float]] = []
-        probs: List[float] = []
-        for o in order:
-            j = int(topk_idx[o])
-            prob = float(p_hired[o])
-            out.append((job_ids[j], job_titles[j], prob))
-            probs.append(prob)
-        return out, probs
-
-    use_llm = bool(use_llm_rerank) and bool(extra_info and extra_info.strip())
-
-    # If no LLM, return same shape with blanks + NN preference_scores
-    if not use_llm:
-        return RecommendResponse(
-            top10=top10,
-            ranked_job_ids=ranked_job_ids,
-            preference_scores=nn_scores_10,   # NN-based “preference” scores
-            violations=empty_violations,
-            reasons=empty_reasons,
-            relative_matrix=rel_matrix,
-            device=DEVICE,
-            llm_used=False,
-            llm_notes="",
+    
+    # Prepare payload for potential LLM reranking OR final output
+    # We need the actual job indices from the global DF
+    global_indices = [int(topk_idx[i]) for i in nn_order]
+    
+    # Construct base results (NN only first)
+    top10_tuples = []
+    results_list = []
+    
+    for idx_in_topk, global_idx in zip(nn_order, global_indices):
+        prob = float(p_hired[idx_in_topk])
+        jid = job_ids[global_idx]
+        title = job_titles[global_idx]
+        text_snippet = job_snippets[global_idx]
+        
+        # Build Tuple
+        top10_tuples.append((jid, title, prob))
+        
+        # Build Rich Result
+        # Since CSV lacks explicit company/location/salary, we use placeholders or simple logic
+        res = JobResult(
+            id=jid,
+            title=title,
+            company="Techfest Partner", # Placeholder
+            location="Singapore",      # Placeholder
+            salaryRange="$5k - $8k",   # Placeholder
+            description=text_snippet,
+            matchScore=round(prob * 100, 1),
+            skillsRequired=["Python", "Data"] # Placeholder or extract from text
         )
+        results_list.append(res)
 
-    # Stage B LLM rerank the Stage-A shortlist (top-K)
-    jobs_payload: List[Dict[str, Any]] = []
-    for pos, j in enumerate(topk_idx):
-        jj = int(j)
-        jobs_payload.append(
-            {
+    valid_job_ids = [r.id for r in results_list]
+    rel_matrix = upper_triangle_abs_diff([p * 100 for p in p_hired[nn_order]]) # Scaled? Or pure prob? utility func uses raw.
+    # Actually utility uses raw. Let's stick to raw for retrieval metrics, but 0-100 for UI.
+    
+    # 6. LLM Reranking (Optional)
+    use_llm = req.use_llm_rerank and req.extra_info and req.extra_info.strip() and llm_available()
+    
+    if use_llm:
+        # Prepare payload for LLM from the Top-K (not just Top-10, maybe Top-20? Logic used Top-K index)
+        # The previous code sent entire Top-K (e.g. 50? 200?) to LLM? usually expensive. 
+        # Previous code: `for pos, j in enumerate(topk_idx):` -> sends ALL K candidates. 
+        # If K=200, that's too many. Let's cap at 20.
+        
+        llm_subset_indices = np.argsort(p_hired)[::-1][:20] # Take top 20 from NN
+        jobs_payload = []
+        for i in llm_subset_indices:
+            jj = int(topk_idx[i])
+            jobs_payload.append({
                 "job_id": job_ids[jj],
                 "title": job_titles[jj],
                 "snippet": job_snippets[jj],
-                "nn_prob": float(p_hired[pos]),
-            }
-        )
+                "nn_prob": float(p_hired[i])
+            })
+            
+        try:
+            llm_res = llm_rerank_topk(
+                user_extra=req.extra_info,
+                jobs_payload=jobs_payload,
+                top_n=10
+            )
+            
+            # Re-order results based on LLM
+            ranked_ids = llm_res.get("ranked_job_ids", [])
+            # Map back to JobResult
+            # We need a lookup for the 20 jobs we sent
+            lookup = {j["job_id"]: j for j in jobs_payload}
+            
+            new_results = []
+            new_tuples = []
+            
+            for rid in ranked_ids:
+                if rid in lookup:
+                    j_data = lookup[rid]
+                    # We use the ORIGINAL nn_prob for match score visual, or strict 100? 
+                    # Usually keep NN score but reorder. 
+                    # Or use preference_score from LLM if available?
+                    # The UI expects matchScore. Let's use NN prob for now to be safe, or average.
+                    prob = j_data["nn_prob"]
+                    
+                    new_tuples.append((rid, j_data["title"], prob))
+                    new_results.append(JobResult(
+                        id=rid,
+                        title=j_data["title"],
+                        company="Techfest Partner",
+                        location="Singapore",
+                        salaryRange="$5k - $12k",
+                        description=j_data["snippet"],
+                        matchScore=round(prob * 100, 1),
+                        skillsRequired=[]
+                    ))
+            
+            # If we have results, override
+            if new_results:
+                results_list = new_results
+                top10_tuples = new_tuples
+                valid_job_ids = [r.id for r in results_list]
+                return RecommendResponse(
+                    top10=top10_tuples,
+                    ranked_job_ids=valid_job_ids,
+                    relative_matrix=rel_matrix, # kept based on NN
+                    results=results_list,
+                    device=DEVICE,
+                    llm_used=True,
+                    llm_notes=llm_res.get("notes", "")
+                )
+                
+        except Exception as e:
+            print(f"LLM Rerank failed: {e}")
+            # Fallback to NN results (already in results_list)
 
-    try:
-        llm_result = llm_rerank_topk(user_extra=req.extra_info or "", jobs_payload=jobs_payload, top_n=LLM_TOPN)
-        llm_result = llm_rerank_topk(
-            user_extra=extra_info or "",
-            jobs_payload=jobs_payload,
-            top_n=LLM_TOPN,
-        )
-
-        ranked_ids_llm: List[str] = llm_result["ranked_job_ids"]
-        preference_scores_llm: List[float] = [float(x) for x in llm_result["preference_scores"]]
-        violations_llm: List[List[str]] = llm_result["violations"]
-        reasons_llm: List[str] = llm_result["reasons"]
-        notes_llm: str = llm_result["notes"]
-
-        # Make sure we only output jobs that exist in payload, and always length 10
-        by_id = {x["job_id"]: x for x in jobs_payload}
-
-        ranked_job_ids_out: List[str] = []
-        top10_out: List[Tuple[str, str, float]] = []
-        probs_out: List[float] = []
-        pref_out: List[float] = []
-        vio_out: List[List[str]] = []
-        rea_out: List[str] = []
-
-        for i, jid in enumerate(ranked_ids_llm[:10]):
-            x = by_id.get(jid)
-            if x is None:
-                continue
-            ranked_job_ids_out.append(jid)
-            top10_out.append((x["job_id"], x["title"], float(x["nn_prob"])))  # still your NN fit prob
-            probs_out.append(float(x["nn_prob"]))
-            pref_out.append(float(preference_scores_llm[i]) if i < len(preference_scores_llm) else 0.0)
-            vio_out.append(violations_llm[i] if i < len(violations_llm) else [])
-            rea_out.append(reasons_llm[i] if i < len(reasons_llm) else "")
-
-        # Fallback fill if LLM output was incomplete
-        if len(ranked_job_ids_out) < 10:
-            seen = set(ranked_job_ids_out)
-            for (jid, title, prob), pref in zip(top10, nn_scores_10):
-                if jid in seen:
-                    continue
-                ranked_job_ids_out.append(jid)
-                top10_out.append((jid, title, prob))
-                probs_out.append(prob)
-                pref_out.append(pref)      # fallback to NN
-                vio_out.append([])
-                rea_out.append("")
-                if len(ranked_job_ids_out) == 10:
-                    break
-
-        rel_matrix_llm = upper_triangle_abs_diff(probs_out)
-
-        return RecommendResponse(
-            top10=top10_out,
-            ranked_job_ids=ranked_job_ids_out,
-            preference_scores=pref_out,
-            violations=vio_out,
-            reasons=rea_out,
-            relative_matrix=rel_matrix_llm,
-            device=DEVICE,
-            llm_used=True,
-            llm_notes=notes_llm,
-        )
-
-    except Exception as e:
-        # LLM failed -> same shape, NN fallback, blanks for LLM fields
-        return RecommendResponse(
-            top10=top10,
-            ranked_job_ids=ranked_job_ids,
-            preference_scores=nn_scores_10,
-            violations=empty_violations,
-            reasons=empty_reasons,
-            relative_matrix=rel_matrix,
-            device=DEVICE,
-            llm_used=False,
-            llm_notes=f"LLM rerank failed; NN-only fallback. Error={type(e).__name__}: {e}",
-        )
+    # Return NN results (either fallback or LLM disabled)
+    return RecommendResponse(
+        top10=top10_tuples,
+        ranked_job_ids=valid_job_ids,
+        relative_matrix=rel_matrix,
+        results=results_list,
+        device=DEVICE,
+        llm_used=False,
+        llm_notes=""
+    )
