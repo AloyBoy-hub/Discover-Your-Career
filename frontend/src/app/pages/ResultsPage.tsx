@@ -62,22 +62,14 @@ export function ResultsPage() {
             animate={{ opacity: 1 }}
             transition={{ delay: 0.2 }}
           >
-            Found <span className="font-semibold text-indigo-600">{mockJobs.length} relevant opportunities</span> based on your profile
+            We have provided <span className="font-semibold text-indigo-600">{mockJobs.length} relevant opportunities</span> based on your profile. Click on any job to see your personalised roadmap.
           </motion.p>
         </div>
 
-        {/* Main Content */}
+        {/* Spreading Activation Network */}
         <Card className="bg-white/80 backdrop-blur-sm border-gray-200 shadow-xl">
           {viewMode === 'network' ? (
             <div className="p-8">
-              <div className="mb-6 text-center">
-                <h2 className="text-xl mb-2 text-gray-900">
-                  Spreading Activation Network
-                </h2>
-                <p className="text-sm text-gray-600">
-                  Jobs are positioned based on their relevance to your profile. Click any job to see your personalized roadmap.
-                </p>
-              </div>
               <SpreadingActivationViz jobs={mockJobs} />
             </div>
           ) : (
