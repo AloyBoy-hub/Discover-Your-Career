@@ -29,16 +29,43 @@ export function UploadPage() {
       : [...array, item];
   };
   const handleAnalyze = async () => {
+    if (!file) {
+      alert("Please upload a file first.");
+      return;
+    }
+
     setLoading(true);
-    // Simulate processing
-    await new Promise(resolve => setTimeout(resolve, 1500));
 
-    // Store data in sessionStorage for the results page
-    sessionStorage.setItem('cvData', cvText);
-    sessionStorage.setItem('preferences', JSON.stringify(preferences));
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
 
-    setLoading(false);
-    navigate('/survey');
+      // Call Backend to parse the CV
+      const response = await fetch('http://localhost:8000/parse_cv', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        alert("Failed to parse resume");
+        setLoading(false);
+        return;
+      }
+
+      const data = await response.json();
+
+      // Store extracted text in sessionStorage
+      sessionStorage.setItem('resume_text', data.text);
+      sessionStorage.setItem('preferences', JSON.stringify(preferences));
+
+      setLoading(false);
+      navigate('/survey');
+
+    } catch (error) {
+      console.error("Error parsing resume:", error);
+      alert("Failed to connect to backend. Make sure the server is running.");
+      setLoading(false);
+    }
   };
 
   const handleFileUpload = (uploadedFile: File) => {
@@ -322,7 +349,7 @@ function FileUpload({ onFileUpload }: FileUploadProps) {
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
-            onSubmit={(e) => e.preventDefault()}
+            onSubmit={(e: React.FormEvent) => e.preventDefault()}
           >
             <input
               type="file"

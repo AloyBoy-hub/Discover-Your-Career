@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { ArrowLeft, List, Network } from 'lucide-react';
@@ -12,6 +12,67 @@ import { mockJobs, Job } from '@/app/data/jobsData';
 export function ResultsPage() {
   const navigate = useNavigate();
   const [viewMode, setViewMode] = useState<'network' | 'list'>('network');
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchRecommendations = async () => {
+      try {
+        const resumeText = sessionStorage.getItem('resume_text');
+        const surveyAnswers = sessionStorage.getItem('surveyAnswers');
+        const preferences = sessionStorage.getItem('preferences');
+
+        let extraInfo = "";
+        if (preferences) {
+          try {
+            const p = JSON.parse(preferences);
+            extraInfo += `Preferences: Industry ${p.industry}, Location ${p.country}/${p.region}, Roles ${p.roleType.join(',')}, Tech ${p.techStack.join(',')}, Skills ${p.confidentSkills.join(',')}.\n`;
+          } catch (e) { }
+        }
+        if (surveyAnswers) {
+          extraInfo += `Survey Answers: ${surveyAnswers}`;
+        }
+
+        console.log("Fetching recommendations with extra_info:", extraInfo);
+
+        const response = await fetch('http://localhost:8000/recommend', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            resume_text: resumeText || " ", // Ensure not empty
+            top_k_retrieve: 200,
+            extra_info: extraInfo,
+            use_llm_rerank: true
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch recommendations');
+        }
+
+        const data = await response.json();
+        console.log("Received data:", data);
+
+        if (data.results && data.results.length > 0) {
+          setJobs(data.results);
+        } else {
+          // If no results (or older backend version), fallback to mapping top10 
+          // Logic: If data.results exists, use it. Else empty.
+          setJobs([]);
+        }
+      } catch (error) {
+        console.error('Error fetching jobs:', error);
+        // Fallback to mock jobs for demo continuity if backend fails
+        setJobs(mockJobs);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchRecommendations();
+  }, []);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
@@ -62,7 +123,7 @@ export function ResultsPage() {
             animate={{ opacity: 1 }}
             transition={{ delay: 0.2 }}
           >
-            We have provided <span className="font-semibold text-indigo-600">{mockJobs.length} relevant opportunities</span> based on your profile. Click on any job to see your personalised roadmap.
+            We have provided <span className="font-semibold text-indigo-600">{jobs.length} relevant opportunities</span> based on your profile. Click on any job to see your personalised roadmap.
           </motion.p>
         </div>
 
@@ -70,12 +131,12 @@ export function ResultsPage() {
         <Card className="bg-white/80 backdrop-blur-sm border-gray-200 shadow-xl">
           {viewMode === 'network' ? (
             <div className="p-8">
-              <SpreadingActivationViz jobs={mockJobs} />
+              <SpreadingActivationViz jobs={jobs} />
             </div>
           ) : (
             <div className="p-6">
               <div className="grid gap-4">
-                {mockJobs.map((job, index) => (
+                {jobs.map((job: Job, index: number) => (
                   <motion.div
                     key={job.id}
                     initial={{ opacity: 0, x: -20 }}
@@ -142,7 +203,7 @@ function JobCard({ job, onClick }: { job: Job; onClick: () => void }) {
       </div>
 
       <div className="flex flex-wrap gap-1">
-        {job.skillsRequired.map((skill) => (
+        {job.skillsRequired.map((skill: string) => (
           <Badge key={skill} variant="outline" className="text-xs">
             {skill}
           </Badge>
