@@ -12,6 +12,10 @@ interface SpreadingActivationVizProps {
 export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
   const navigate = useNavigate();
 
+  // MASTER CONTROLS: Change these to shift EVERYTHING (You icon, Lines, and JobCards)
+  const centerX = 46; // Decrease to shift LEFT
+  const centerY = 38; // Decrease to shift UP
+
   // Sort jobs by match score (descending)
   const sortedJobs = [...jobs].sort((a, b) => b.matchScore - a.matchScore);
 
@@ -19,33 +23,20 @@ export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
   const getPosition = (index: number, total: number) => {
     // Top match (highest score) - placed directly below center
     if (index === 0) {
-      return { x: 50, y: 50 }; // Center (User) placement logic handled separately in render
-    }
-
-    // For layout calculations of jobs:
-    // Index 0 of sortedJobs -> Positioned below
-    // Indices 1...N -> Positioned in circle
-
-    if (index === 0) {
-      return { x: 50, y: 85 }; // Best match below the center (50%)
+      return { x: centerX - 4 , y: centerY, angle:90 }; // Anchored relative to the master center
     }
 
     // Remaining jobs arranged in a circle
-    const remainingCount = total - 1; // Exclude top match
+    const remainingCount = total - 1;
     const circleIndex = index - 1;
-    const radius = 38; // Slightly larger to fit cards
+    const radius = 38;
     const angleStep = 360 / remainingCount;
-    // Start from -90 deg (top) and go around, but since top is taken/avoided, let's offset
     const angle = -90 + (circleIndex * angleStep);
-
-    // Adjust angle to avoid overlapping the bottom one (which is at 90 degrees) if needed, 
-    // but equidistant circle usually works fine if n > 3.
-    // Let's try uniform distribution first.
 
     const radians = (angle * Math.PI) / 180;
     return {
-      x: 50 + radius * Math.cos(radians),
-      y: 50 + radius * Math.sin(radians),
+      x: centerX + radius * Math.cos(radians) -3, // Shifts relative to centerX
+      y: centerY + radius * Math.sin(radians), // Shifts relative to centerY
     };
   };
 
@@ -55,25 +46,7 @@ export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
 
   return (
     <div className="relative w-full" style={{ height: '900px' }}>
-      {/* Center node - User Profile */}
-      <motion.div
-        className="absolute z-20"
-        style={{
-          left: '50%',
-          top: '50%', // Centered vertically
-          transform: 'translate(-50%, -50%)',
-        }}
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ duration: 0.5 }}
-      >
-        <div className="w-24 h-24 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-2xl border-4 border-white">
-          <div className="text-center text-white">
-            <div className="text-2xl mb-1">👤</div>
-            <div className="text-xs">You</div>
-          </div>
-        </div>
-      </motion.div>
+
 
       {/* Connection lines */}
       <svg className="absolute inset-0 w-full h-full pointer-events-none">
@@ -85,16 +58,15 @@ export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
         </defs>
         {sortedJobs.map((job, index) => {
           const pos = getPosition(index, sortedJobs.length);
-          // Center node position is fixed at 50%, 35%
           return (
             <motion.line
               key={job.id}
-              x1="50%"
-              y1="50%"
-              x2={`${pos.x}%`}
+              x1={`${centerX+3}%`}
+              y1={`${centerY+8}%`} // Lines start from the shifted center
+              x2={`${pos.x+8}%`}
               y2={`${pos.y}%`}
               stroke="url(#lineGradient)"
-              strokeWidth={index === 0 ? "4" : "2"} // Thicker line for top match
+              strokeWidth={index === 0 ? "4" : "2"}
               initial={{ pathLength: 0 }}
               animate={{ pathLength: 1 }}
               transition={{ duration: 1, delay: index * 0.1 }}
@@ -113,7 +85,7 @@ export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
             key={job.id}
             className="absolute cursor-pointer z-10"
             style={{
-              left: `${pos.x}%`,
+              left: `${pos.x}%`, // JobCard position is based on shifted getPosition results
               top: `${pos.y}%`,
               transform: 'translate(-50%, -50%)',
             }}
