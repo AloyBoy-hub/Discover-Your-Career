@@ -5,4 +5,8 @@ pdfminer.six
 spacy
 google-generativeai
 openai
+pandas
+torch
+transformers
+numpy
 requests

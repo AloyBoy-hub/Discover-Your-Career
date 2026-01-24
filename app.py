@@ -5,13 +5,16 @@ import json
 import os
 import re
 import sys
+import shutil
+import tempfile
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from transformers import AutoTokenizer
 
@@ -48,10 +51,14 @@ LLM_SNIPPET_CHARS = 320
 # ============================================================
 # Feature extraction (MATCHES your extract_features.py)
 # ============================================================
+# ============================================================
+# Feature extraction (MATCHES your extract_features.py)
+# ============================================================
 # Ensure backend module can be imported (same approach as your extract_features.py)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from backend.skill_extractor import extract_skills_from_text, SKILL_PATTERNS  # noqa: E402
+from backend.resume_parser import parse_resume # noqa: E402
 
 # Canonical skill columns are defined by your shared skill dictionary
 SKILLS = sorted(SKILL_PATTERNS.keys())
@@ -354,6 +361,9 @@ reranker: Optional[Reranker] = None
 # ============================================================
 # Lifespan (startup / shutdown)
 # ============================================================
+# ============================================================
+# Lifespan (startup / shutdown)
+# ============================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global jobs_df, job_ids, job_titles, job_texts, job_snippets, job_emb
@@ -361,31 +371,67 @@ async def lifespan(app: FastAPI):
 
     print("[startup] loading data and models...")
 
-    jobs_df = pd.read_csv(JOBS_CSV)
-    job_ids = jobs_df["job_id"].astype(str).tolist()
-    job_titles = (
-        jobs_df["title"].astype(str).tolist()
-        if "title" in jobs_df.columns
-        else [""] * len(job_ids)
-    )
-    job_texts = jobs_df["job_text"].astype(str).tolist()
-    job_snippets = [make_snippet(t, LLM_SNIPPET_CHARS) for t in job_texts]
+    if os.path.exists(JOBS_CSV):
+        jobs_df = pd.read_csv(JOBS_CSV)
+        job_ids = jobs_df["job_id"].astype(str).tolist()
+        job_titles = (
+            jobs_df["title"].astype(str).tolist()
+            if "title" in jobs_df.columns
+            else [""] * len(job_ids)
+        )
+        job_texts = jobs_df["job_text"].astype(str).tolist()
+        job_snippets = [make_snippet(t, LLM_SNIPPET_CHARS) for t in job_texts]
+    else:
+        print(f"WARNING: {JOBS_CSV} not found. Running with empty job database.")
+        jobs_df = pd.DataFrame() # dummy
+        job_ids = []
+        job_titles = []
+        job_texts = []
+        job_snippets = []
 
-    feat_df = pd.read_csv(CAND_FEAT_CSV)
-    feature_columns = [c for c in feat_df.columns if c != "candidate_id"]
-    feat_dim = len(feature_columns)
+    if os.path.exists(CAND_FEAT_CSV):
+        feat_df = pd.read_csv(CAND_FEAT_CSV)
+        feature_columns = [c for c in feat_df.columns if c != "candidate_id"]
+        feat_dim = len(feature_columns)
+    else:
+        print(f"WARNING: {CAND_FEAT_CSV} not found. Using default feature dimension 0.")
+        feature_columns = []
+        feat_dim = 0
+        
+    # --- Load Models (Robust) ---
+    try:
+        if os.path.exists(TOWER_WEIGHTS):
+            tower = TwoTower(model_name=MODEL_NAME, emb_dim=256, cand_feat_dim=feat_dim).to(DEVICE)
+            tower.load_state_dict(torch.load(TOWER_WEIGHTS, map_location=DEVICE, weights_only=True))
+            tower.eval()
+        else:
+             print(f"WARNING: {TOWER_WEIGHTS} not found. TwoTower model will not be loaded.")
+             tower = None
+    except Exception as e:
+        print(f"ERROR loading TwoTower: {e}")
+        tower = None
 
-    tower = TwoTower(model_name=MODEL_NAME, emb_dim=256, cand_feat_dim=feat_dim).to(DEVICE)
-    tower.load_state_dict(torch.load(TOWER_WEIGHTS, map_location=DEVICE, weights_only=True))
-    tower.eval()
+    try:
+        if os.path.exists(RERANK_WEIGHTS):
+            reranker = Reranker(emb_dim=256, hidden=256, dropout=0.2).to(DEVICE)
+            reranker.load_state_dict(torch.load(RERANK_WEIGHTS, map_location=DEVICE, weights_only=True))
+            reranker.eval()
+        else:
+            print(f"WARNING: {RERANK_WEIGHTS} not found. Reranker model will not be loaded.")
+            reranker = None
+    except Exception as e:
+        print(f"ERROR loading Reranker: {e}")
+        reranker = None
 
-    reranker = Reranker(emb_dim=256, hidden=256, dropout=0.2).to(DEVICE)
-    reranker.load_state_dict(torch.load(RERANK_WEIGHTS, map_location=DEVICE, weights_only=True))
-    reranker.eval()
+    # Encode jobs if tower exists
+    if tower is not None and len(job_texts) > 0:
+        print("Encoding job embeddings...")
+        job_emb = encode_job_embeddings(tokenizer, tower, job_texts, device=DEVICE)
+        print(f"[startup] DEVICE={DEVICE} jobs={len(job_ids)} job_emb={job_emb.shape}")
+    else:
+        print("WARNING: Skipping job embedding generation (no tower or no jobs).")
+        job_emb = None
 
-    job_emb = encode_job_embeddings(tokenizer, tower, job_texts, device=DEVICE)
-
-    print(f"[startup] DEVICE={DEVICE} jobs={len(job_ids)} job_emb={job_emb.shape}")
     yield
     print("[shutdown] server stopping")
 
@@ -398,6 +444,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Enable CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/")
 def root():
@@ -405,24 +460,87 @@ def root():
 
 
 @app.post("/recommend", response_model=RecommendResponse)
-def recommend(req: RecommendRequest):
+async def recommend(
+    # Option 1: File upload
+    file: Optional[UploadFile] = File(None),
+    # Option 2: JSON-like fields via Form (since we have a file, everything must be Form)
+    resume_text: Optional[str] = Form(None),
+    top_k_retrieve: int = Form(TOPK_RETRIEVE_DEFAULT),
+    extra_info: Optional[str] = Form(None),
+    use_llm_rerank: bool = Form(True),
+    # For features_override, passing JSON string in Form is easiest, or list of queries
+    # Simple fix: accept a JSON string for overrides if needed
+    features_override_json: Optional[str] = Form(None)
+):
+    """
+    Hybrid endpoint:
+    - If `file` is uploaded (PDF/TXT), we parse it.
+    - If `resume_text` is provided directly, we use that.
+    
+    Returns standard RecommendResponse.
+    """
     if tower is None or reranker is None or job_emb is None:
-        raise HTTPException(status_code=503, detail="Models not loaded yet.")
+        # For testing frontend connection without models, return a Mock response if permitted
+        # Or just error out. Let's error out but with a clear message.
+        # ALLOW_MOCK for demo purposes if env var set?
+        if os.getenv("ALLOW_MOCK_RESPONSE", "0") == "1":
+             return RecommendResponse(
+                top10=[],
+                relative_matrix=[],
+                device=DEVICE,
+                llm_used=False,
+                llm_notes="Models not loaded. Mock response enabled."
+            )
+        raise HTTPException(status_code=503, detail="Models not loaded yet (missing .pt files).")
 
-    # --- candidate feature vector ---
-    if req.features_override is not None:
-        if len(req.features_override) != feat_dim:
-            raise HTTPException(status_code=400, detail=f"features_override length must be {feat_dim}")
-        cand_feat_vec = np.array(req.features_override, dtype=np.float32)
+    # 1. Parse Input
+    final_resume_text = ""
+    
+    if file:
+        # Save temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+        
+        try:
+            parsed_data = parse_resume(tmp_path)
+            if parsed_data:
+                # Combine extracted fields into a rich text for embedding
+                # This logic depends on what your model expects. 
+                # If model expects raw text, use parsed_data['raw_text']
+                final_resume_text = parsed_data.get('raw_text', '')
+            else:
+                final_resume_text = ""
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+    
+    elif resume_text:
+        final_resume_text = resume_text
     else:
-        cand_feat_vec = build_feature_vector(req.resume_text, feature_columns)
+        raise HTTPException(status_code=400, detail="Must provide either 'file' or 'resume_text'.")
+
+    # 2. Features Override
+    cand_feat_vec = None
+    if features_override_json:
+        try:
+            overrides = json.loads(features_override_json)
+            if isinstance(overrides, list) and len(overrides) == feat_dim:
+                cand_feat_vec = np.array(overrides, dtype=np.float32)
+        except:
+             pass # ignore invalid json
+
+    # 3. Default Features
+    if cand_feat_vec is None:
+        cand_feat_vec = build_feature_vector(final_resume_text, feature_columns)
 
     # --- candidate embedding ---
-    cand_emb = encode_candidate_embedding(tokenizer, tower, req.resume_text, cand_feat_vec, DEVICE)
+    cand_emb = encode_candidate_embedding(tokenizer, tower, final_resume_text, cand_feat_vec, DEVICE)
 
     # --- Stage A: retrieve top-K by tower similarity ---
     scores = job_emb @ cand_emb.detach().cpu().numpy()
-    K = min(req.top_k_retrieve, len(scores))
+    K = min(top_k_retrieve, len(scores))
+
     topk_idx = np.argpartition(scores, -K)[-K:]
     topk_idx = topk_idx[np.argsort(scores[topk_idx])[::-1]]
 
@@ -441,7 +559,7 @@ def recommend(req: RecommendRequest):
             probs.append(prob)
         return out, probs
 
-    use_llm = bool(req.use_llm_rerank) and bool(req.extra_info and req.extra_info.strip())
+    use_llm = bool(use_llm_rerank) and bool(extra_info and extra_info.strip())
 
     # If no extra_info, skip LLM and return NN-only immediately
     if not use_llm:
@@ -471,7 +589,7 @@ def recommend(req: RecommendRequest):
 
     try:
         llm_result = llm_rerank_topk(
-            user_extra=req.extra_info or "",
+            user_extra=extra_info or "",
             jobs_payload=jobs_payload,
             top_n=LLM_TOPN,
         )
