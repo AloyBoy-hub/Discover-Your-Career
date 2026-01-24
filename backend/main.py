@@ -58,3 +58,15 @@ async def upload_resume(file: UploadFile = File(...)):
         "filename": file.filename,
         "data": data
     }
+
+from pydantic import BaseModel
+from typing import List
+from backend.roadmap import generate_roadmap
+
+class RoadmapRequest(BaseModel):
+    skills: List[str]
+    role: str
+
+@app.post("/generate-roadmap")
+async def create_roadmap(request: RoadmapRequest):
+    return generate_roadmap(request.skills, request.role)
