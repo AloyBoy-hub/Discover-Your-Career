@@ -17,10 +17,11 @@ from transformers import AutoTokenizer
 
 from two_tower import TwoTower
 from rerank_model import Reranker
+from deploy_utils import load_json, load_npy
 
 # Optional: LLM rerank (Stage B)
 try:
-    from openai import OpenAI  # pip install -U openai
+    from openai import OpenAI
 except Exception:
     OpenAI = None
 
@@ -28,16 +29,11 @@ except Exception:
 # ============================================================
 # Config
 # ============================================================
-MODEL_NAME = "distilbert-base-uncased"
-MAX_LEN = 256
-BATCH_SIZE = 64
-TOPK_RETRIEVE_DEFAULT = 200
+ART_DIR = os.getenv("ART_DIR", "artifacts")
+DEPLOY_CFG_PATH = os.path.join(ART_DIR, "deploy_config.json")
 
 JOBS_CSV = "data/jobs.csv"
-CAND_FEAT_CSV = "data/candidate_features.csv"
-
-TOWER_WEIGHTS = "two_tower.pt"
-RERANK_WEIGHTS = "reranker.pt"
+TOPK_RETRIEVE_DEFAULT = 200
 
 # LLM rerank
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1-mini")
@@ -48,12 +44,9 @@ LLM_SNIPPET_CHARS = 320
 # ============================================================
 # Feature extraction (MATCHES your extract_features.py)
 # ============================================================
-# Ensure backend module can be imported (same approach as your extract_features.py)
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 from backend.skill_extractor import extract_skills_from_text, SKILL_PATTERNS  # noqa: E402
 
-# Canonical skill columns are defined by your shared skill dictionary
 SKILLS = sorted(SKILL_PATTERNS.keys())
 
 
@@ -64,10 +57,6 @@ def normalize(text: str) -> str:
 
 
 def extract_years_experience(text: str) -> float:
-    """
-    Very rough: finds patterns like '3 years', '5+ years', '2 yrs'
-    Returns max found, else 0.
-    """
     text = normalize(text)
     patterns = [
         r"(\d{1,2})\s*\+?\s*(?:years|year|yrs|yr)\s+of\s+experience",
@@ -85,14 +74,6 @@ def extract_years_experience(text: str) -> float:
 
 
 def extract_edu_level(text: str) -> int:
-    """
-    Ordinal encoding:
-    4 = PhD/Doctorate
-    3 = Master
-    2 = Bachelor
-    1 = Diploma/Poly
-    0 = unknown
-    """
     text = normalize(text)
     if "phd" in text or "doctor" in text or "doctorate" in text:
         return 4
@@ -114,16 +95,10 @@ def skill_vector(text: str) -> np.ndarray:
 
 
 def build_feature_vector(resume_text: str, feature_columns: List[str]) -> np.ndarray:
-    """
-    Builds a feature vector for ONE user resume, using the SAME schema as candidate_features.csv:
-      years_experience, edu_level, skill_<canonical_skill>...
-    IMPORTANT: We respect feature_columns ordering from candidate_features.csv
-    so it stays consistent with training.
-    """
     txt = resume_text if isinstance(resume_text, str) else ""
     years = extract_years_experience(txt)
     edu = float(extract_edu_level(txt))
-    skills_vec = skill_vector(txt)  # aligned with SKILLS sorted(SKILL_PATTERNS.keys())
+    skills_vec = skill_vector(txt)
 
     values: Dict[str, float] = {
         "years_experience": float(years),
@@ -161,36 +136,19 @@ def make_snippet(text: str, max_chars: int = 320) -> str:
 
 
 @torch.no_grad()
-def encode_job_embeddings(tokenizer, tower, job_texts: List[str], device: str) -> np.ndarray:
-    embs = []
-    for i in range(0, len(job_texts), BATCH_SIZE):
-        chunk = job_texts[i : i + BATCH_SIZE]
-        tok = tokenizer(
-            chunk,
-            padding=True,
-            truncation=True,
-            max_length=MAX_LEN,
-            return_tensors="pt",
-        )
-        tok = {k: v.to(device) for k, v in tok.items()}
-        e = tower.encode_job(tok)
-        embs.append(e.detach().cpu().numpy())
-    return np.vstack(embs)
-
-
-@torch.no_grad()
 def encode_candidate_embedding(
     tokenizer,
     tower,
     resume_text: str,
     cand_feat_vec: np.ndarray,
     device: str,
+    max_len: int,
 ) -> torch.Tensor:
     tok = tokenizer(
         [resume_text],
         padding=True,
         truncation=True,
-        max_length=MAX_LEN,
+        max_length=max_len,
         return_tensors="pt",
     )
     tok = {k: v.to(device) for k, v in tok.items()}
@@ -201,13 +159,8 @@ def encode_candidate_embedding(
 
 @torch.no_grad()
 def rerank_probs(reranker: Reranker, cand_emb: torch.Tensor, job_emb_topk: torch.Tensor) -> np.ndarray:
-    """
-    cand_emb: [D]
-    job_emb_topk: [K, D]
-    returns: [K] probabilities (or scores) from your reranker
-    """
     c = cand_emb.unsqueeze(0).expand(job_emb_topk.size(0), -1)
-    p = reranker(c, job_emb_topk)  # [K] or [K,1]
+    p = reranker(c, job_emb_topk)
     p = p.squeeze(-1)
     return p.detach().cpu().numpy()
 
@@ -225,16 +178,6 @@ def llm_rerank_topk(
     jobs_payload: List[Dict[str, Any]],
     top_n: int = 10,
 ) -> Dict[str, Any]:
-    """
-    jobs_payload items:
-      { job_id, title, snippet, nn_prob }
-    Output dict:
-      ranked_job_ids: [10]
-      preference_scores: [10] floats [0,1]
-      violations: [10] list-of-list[str]
-      reasons: [10] list[str]
-      notes: str
-    """
     if not llm_available():
         raise RuntimeError("LLM rerank requested but OPENAI_API_KEY or openai SDK is not available.")
 
@@ -245,30 +188,10 @@ def llm_rerank_topk(
         "schema": {
             "type": "object",
             "properties": {
-                "ranked_job_ids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": top_n,
-                    "maxItems": top_n,
-                },
-                "preference_scores": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "minItems": top_n,
-                    "maxItems": top_n,
-                },
-                "violations": {
-                    "type": "array",
-                    "items": {"type": "array", "items": {"type": "string"}},
-                    "minItems": top_n,
-                    "maxItems": top_n,
-                },
-                "reasons": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": top_n,
-                    "maxItems": top_n,
-                },
+                "ranked_job_ids": {"type": "array", "items": {"type": "string"}, "minItems": top_n, "maxItems": top_n},
+                "preference_scores": {"type": "array", "items": {"type": "number"}, "minItems": top_n, "maxItems": top_n},
+                "violations": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}, "minItems": top_n, "maxItems": top_n},
+                "reasons": {"type": "array", "items": {"type": "string"}, "minItems": top_n, "maxItems": top_n},
                 "notes": {"type": "string"},
             },
             "required": ["ranked_job_ids", "preference_scores", "violations", "reasons", "notes"],
@@ -290,12 +213,7 @@ def llm_rerank_topk(
 
     resp = client.responses.create(
         model=LLM_MODEL,
-        input=[
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}],
-            }
-        ],
+        input=[{"role": "user", "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}],
         text={"format": {"type": "json_schema", "json_schema": schema}},
     )
 
@@ -303,39 +221,35 @@ def llm_rerank_topk(
 
 
 # ============================================================
-# FastAPI schemas
+# FastAPI schemas (ALWAYS same shape)
 # ============================================================
 class RecommendRequest(BaseModel):
     resume_text: str
     top_k_retrieve: int = Field(TOPK_RETRIEVE_DEFAULT, ge=10, le=5000)
-
-    # If you want to bypass resume-derived features, pass an explicit vector.
     features_override: Optional[List[float]] = None
-
-    # Stage B: optional free-form preferences/constraints
     extra_info: Optional[str] = None
     use_llm_rerank: bool = True
 
 
 class RecommendResponse(BaseModel):
-    # fit score = reranker probability (your “hiring probability proxy”)
-    top10: List[Tuple[str, str, float]]
+    # Always present
+    top10: List[Tuple[str, str, float]]                 # (job_id, title, nn_prob)
+    ranked_job_ids: List[str]                           # length 10
+    preference_scores: List[float]                      # length 10
+    violations: List[List[str]]                         # length 10 (empty lists when no LLM)
+    reasons: List[str]                                  # length 10 ("" when no LLM)
     relative_matrix: List[List[float]]
     device: str
 
-    # present when llm_used=True
+    # Metadata
     llm_used: bool = False
-    preference_scores: Optional[List[float]] = None
-    violations: Optional[List[List[str]]] = None
-    reasons: Optional[List[str]] = None
-    llm_notes: Optional[str] = None
+    llm_notes: str = ""
 
 
 # ============================================================
-# Global cache (loaded once)
+# Global cache
 # ============================================================
 DEVICE = pick_device()
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
 
 jobs_df: Optional[pd.DataFrame] = None
 job_ids: List[str] = []
@@ -349,41 +263,57 @@ feat_dim: int = 0
 
 tower: Optional[TwoTower] = None
 reranker: Optional[Reranker] = None
+tokenizer = None
+
+CFG = None
+MAX_LEN = None
 
 
 # ============================================================
-# Lifespan (startup / shutdown)
+# Lifespan
 # ============================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global jobs_df, job_ids, job_titles, job_texts, job_snippets, job_emb
-    global feature_columns, feat_dim, tower, reranker
+    global feature_columns, feat_dim, tower, reranker, tokenizer
+    global CFG, MAX_LEN
 
-    print("[startup] loading data and models...")
+    CFG = load_json(DEPLOY_CFG_PATH)
+    MAX_LEN = int(CFG["max_len"])
+
+    tok_dir = os.path.join(ART_DIR, CFG["tokenizer_dir"])
+    tokenizer = AutoTokenizer.from_pretrained(tok_dir, use_fast=True)
+
+    feature_columns = CFG["feature_columns"]
+    feat_dim = len(feature_columns)
 
     jobs_df = pd.read_csv(JOBS_CSV)
     job_ids = jobs_df["job_id"].astype(str).tolist()
-    job_titles = (
-        jobs_df["title"].astype(str).tolist()
-        if "title" in jobs_df.columns
-        else [""] * len(job_ids)
-    )
+    job_titles = jobs_df["title"].astype(str).tolist() if "title" in jobs_df.columns else [""] * len(job_ids)
     job_texts = jobs_df["job_text"].astype(str).tolist()
     job_snippets = [make_snippet(t, LLM_SNIPPET_CHARS) for t in job_texts]
 
-    feat_df = pd.read_csv(CAND_FEAT_CSV)
-    feature_columns = [c for c in feat_df.columns if c != "candidate_id"]
-    feat_dim = len(feature_columns)
-
-    tower = TwoTower(model_name=MODEL_NAME, emb_dim=256, cand_feat_dim=feat_dim).to(DEVICE)
-    tower.load_state_dict(torch.load(TOWER_WEIGHTS, map_location=DEVICE, weights_only=True))
+    tower = TwoTower(
+        model_name=CFG["model_name"],
+        emb_dim=CFG["tower"]["emb_dim"],
+        cand_feat_dim=CFG["tower"]["cand_feat_dim"],
+    ).to(DEVICE)
+    tower.load_state_dict(
+        torch.load(os.path.join(ART_DIR, CFG["tower"]["weights"]), map_location=DEVICE, weights_only=True)
+    )
     tower.eval()
 
-    reranker = Reranker(emb_dim=256, hidden=256, dropout=0.2).to(DEVICE)
-    reranker.load_state_dict(torch.load(RERANK_WEIGHTS, map_location=DEVICE, weights_only=True))
+    reranker = Reranker(
+        emb_dim=CFG["reranker"]["emb_dim"],
+        hidden=CFG["reranker"]["hidden"],
+        dropout=CFG["reranker"]["dropout"],
+    ).to(DEVICE)
+    reranker.load_state_dict(
+        torch.load(os.path.join(ART_DIR, CFG["reranker"]["weights"]), map_location=DEVICE, weights_only=True)
+    )
     reranker.eval()
 
-    job_emb = encode_job_embeddings(tokenizer, tower, job_texts, device=DEVICE)
+    job_emb = load_npy(os.path.join(ART_DIR, CFG["job_emb_path"]))
 
     print(f"[startup] DEVICE={DEVICE} jobs={len(job_ids)} job_emb={job_emb.shape}")
     yield
@@ -393,10 +323,7 @@ async def lifespan(app: FastAPI):
 # ============================================================
 # App
 # ============================================================
-app = FastAPI(
-    title="Techfest Job Recommender",
-    lifespan=lifespan,
-)
+app = FastAPI(title="Techfest Job Recommender", lifespan=lifespan)
 
 
 @app.get("/")
@@ -406,10 +333,10 @@ def root():
 
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(req: RecommendRequest):
-    if tower is None or reranker is None or job_emb is None:
+    if tower is None or reranker is None or job_emb is None or tokenizer is None:
         raise HTTPException(status_code=503, detail="Models not loaded yet.")
 
-    # --- candidate feature vector ---
+    # Candidate feature vector
     if req.features_override is not None:
         if len(req.features_override) != feat_dim:
             raise HTTPException(status_code=400, detail=f"features_override length must be {feat_dim}")
@@ -417,46 +344,54 @@ def recommend(req: RecommendRequest):
     else:
         cand_feat_vec = build_feature_vector(req.resume_text, feature_columns)
 
-    # --- candidate embedding ---
-    cand_emb = encode_candidate_embedding(tokenizer, tower, req.resume_text, cand_feat_vec, DEVICE)
+    # Candidate embedding
+    cand_emb = encode_candidate_embedding(tokenizer, tower, req.resume_text, cand_feat_vec, DEVICE, max_len=MAX_LEN)
 
-    # --- Stage A: retrieve top-K by tower similarity ---
+    # Retrieve top-K by dot product (TwoTower)
     scores = job_emb @ cand_emb.detach().cpu().numpy()
     K = min(req.top_k_retrieve, len(scores))
     topk_idx = np.argpartition(scores, -K)[-K:]
     topk_idx = topk_idx[np.argsort(scores[topk_idx])[::-1]]
 
-    # --- Stage A: reranker probability for the top-K ---
+    # Rerank top-K (Reranker) => probabilities
     job_emb_topk = torch.from_numpy(job_emb[topk_idx]).to(DEVICE).float()
     p_hired = rerank_probs(reranker, cand_emb, job_emb_topk)  # [K]
 
-    def nn_only_top10() -> Tuple[List[Tuple[str, str, float]], List[float]]:
-        order = np.argsort(p_hired)[::-1][:10]
-        out: List[Tuple[str, str, float]] = []
-        probs: List[float] = []
-        for o in order:
-            j = int(topk_idx[o])
-            prob = float(p_hired[o])
-            out.append((job_ids[j], job_titles[j], prob))
-            probs.append(prob)
-        return out, probs
+    # NN top-10 (always available)
+    nn_order = np.argsort(p_hired)[::-1][:10]
+    top10: List[Tuple[str, str, float]] = []
+    ranked_job_ids: List[str] = []
+    nn_scores_10: List[float] = []
+    for o in nn_order:
+        j = int(topk_idx[o])
+        prob = float(p_hired[o])
+        top10.append((job_ids[j], job_titles[j], prob))
+        ranked_job_ids.append(job_ids[j])
+        nn_scores_10.append(prob)
 
+    # Default (no-LLM) fields — ALWAYS returned
+    empty_violations = [[] for _ in range(10)]
+    empty_reasons = ["" for _ in range(10)]
+    rel_matrix = upper_triangle_abs_diff(nn_scores_10)
+
+    # Decide if we will call LLM
     use_llm = bool(req.use_llm_rerank) and bool(req.extra_info and req.extra_info.strip())
 
-    # If no extra_info, skip LLM and return NN-only immediately
+    # If no LLM, return same shape with blanks + NN preference_scores
     if not use_llm:
-        top10, probs_10 = nn_only_top10()
-        rel_matrix = upper_triangle_abs_diff(probs_10)
         return RecommendResponse(
             top10=top10,
+            ranked_job_ids=ranked_job_ids,
+            preference_scores=nn_scores_10,   # NN-based “preference” scores
+            violations=empty_violations,
+            reasons=empty_reasons,
             relative_matrix=rel_matrix,
             device=DEVICE,
             llm_used=False,
+            llm_notes="",
         )
 
-    # ============================================================
-    # Stage B: LLM rerank the Stage-A shortlist
-    # ============================================================
+    # Stage B LLM rerank the Stage-A shortlist (top-K)
     jobs_payload: List[Dict[str, Any]] = []
     for pos, j in enumerate(topk_idx):
         jj = int(j)
@@ -470,65 +405,74 @@ def recommend(req: RecommendRequest):
         )
 
     try:
-        llm_result = llm_rerank_topk(
-            user_extra=req.extra_info or "",
-            jobs_payload=jobs_payload,
-            top_n=LLM_TOPN,
-        )
+        llm_result = llm_rerank_topk(user_extra=req.extra_info or "", jobs_payload=jobs_payload, top_n=LLM_TOPN)
 
-        ranked_ids: List[str] = llm_result["ranked_job_ids"]
-        preference_scores: List[float] = [float(x) for x in llm_result["preference_scores"]]
-        violations: List[List[str]] = llm_result["violations"]
-        reasons: List[str] = llm_result["reasons"]
-        notes: str = llm_result["notes"]
+        ranked_ids_llm: List[str] = llm_result["ranked_job_ids"]
+        preference_scores_llm: List[float] = [float(x) for x in llm_result["preference_scores"]]
+        violations_llm: List[List[str]] = llm_result["violations"]
+        reasons_llm: List[str] = llm_result["reasons"]
+        notes_llm: str = llm_result["notes"]
 
+        # Make sure we only output jobs that exist in payload, and always length 10
         by_id = {x["job_id"]: x for x in jobs_payload}
 
-        top10: List[Tuple[str, str, float]] = []
-        probs_10: List[float] = []
+        ranked_job_ids_out: List[str] = []
+        top10_out: List[Tuple[str, str, float]] = []
+        probs_out: List[float] = []
+        pref_out: List[float] = []
+        vio_out: List[List[str]] = []
+        rea_out: List[str] = []
 
-        for jid in ranked_ids:
+        for i, jid in enumerate(ranked_ids_llm[:10]):
             x = by_id.get(jid)
             if x is None:
                 continue
-            # Your requirement: fit score is probability output from your model's last layer
-            fit_prob = float(x["nn_prob"])
-            top10.append((x["job_id"], x["title"], fit_prob))
-            probs_10.append(fit_prob)
+            ranked_job_ids_out.append(jid)
+            top10_out.append((x["job_id"], x["title"], float(x["nn_prob"])))  # still your NN fit prob
+            probs_out.append(float(x["nn_prob"]))
+            pref_out.append(float(preference_scores_llm[i]) if i < len(preference_scores_llm) else 0.0)
+            vio_out.append(violations_llm[i] if i < len(violations_llm) else [])
+            rea_out.append(reasons_llm[i] if i < len(reasons_llm) else "")
 
-        # Fallback if LLM output is weird/incomplete
-        if len(top10) < 10:
-            fallback_top10, fallback_probs = nn_only_top10()
-            seen = {t[0] for t in top10}
-            for t, p in zip(fallback_top10, fallback_probs):
-                if t[0] in seen:
+        # Fallback fill if LLM output was incomplete
+        if len(ranked_job_ids_out) < 10:
+            seen = set(ranked_job_ids_out)
+            for (jid, title, prob), pref in zip(top10, nn_scores_10):
+                if jid in seen:
                     continue
-                top10.append(t)
-                probs_10.append(p)
-                if len(top10) == 10:
+                ranked_job_ids_out.append(jid)
+                top10_out.append((jid, title, prob))
+                probs_out.append(prob)
+                pref_out.append(pref)      # fallback to NN
+                vio_out.append([])
+                rea_out.append("")
+                if len(ranked_job_ids_out) == 10:
                     break
 
-        rel_matrix = upper_triangle_abs_diff(probs_10)
+        rel_matrix_llm = upper_triangle_abs_diff(probs_out)
 
         return RecommendResponse(
-            top10=top10,
-            relative_matrix=rel_matrix,
+            top10=top10_out,
+            ranked_job_ids=ranked_job_ids_out,
+            preference_scores=pref_out,
+            violations=vio_out,
+            reasons=rea_out,
+            relative_matrix=rel_matrix_llm,
             device=DEVICE,
             llm_used=True,
-            preference_scores=preference_scores,
-            violations=violations,
-            reasons=reasons,
-            llm_notes=notes,
+            llm_notes=notes_llm,
         )
 
     except Exception as e:
-        # LLM failed -> NN-only fallback
-        top10, probs_10 = nn_only_top10()
-        rel_matrix = upper_triangle_abs_diff(probs_10)
+        # LLM failed -> same shape, NN fallback, blanks for LLM fields
         return RecommendResponse(
             top10=top10,
+            ranked_job_ids=ranked_job_ids,
+            preference_scores=nn_scores_10,
+            violations=empty_violations,
+            reasons=empty_reasons,
             relative_matrix=rel_matrix,
             device=DEVICE,
             llm_used=False,
-            llm_notes=f"LLM rerank failed; used NN-only fallback. Error={type(e).__name__}: {e}",
+            llm_notes=f"LLM rerank failed; NN-only fallback. Error={type(e).__name__}: {e}",
         )

@@ -26,7 +26,7 @@ class TextEncoder(nn.Module):
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         out = self.backbone(input_ids=input_ids, attention_mask=attention_mask)
         pooled = mean_pool(out.last_hidden_state, attention_mask)
-        return self.proj(pooled)  # [B,D] (not normalized here)
+        return self.proj(pooled)
 
 class FeatureEncoder(nn.Module):
     def __init__(self, in_dim: int, out_dim: int = 64):
@@ -48,12 +48,12 @@ class TwoTower(nn.Module):
         self.cand_text = TextEncoder(model_name=model_name, out_dim=emb_dim)
         self.job_text  = TextEncoder(model_name=model_name, out_dim=emb_dim)
 
-        # 🔒 Freeze transformer backbones for speed
+        # Freeze transformer backbones for speed
         for p in self.cand_text.backbone.parameters():
             p.requires_grad = False
         for p in self.job_text.backbone.parameters():
             p.requires_grad = False
-            
+
         self.cand_feat_dim = cand_feat_dim
         if cand_feat_dim > 0:
             self.cand_feat = FeatureEncoder(in_dim=cand_feat_dim, out_dim=64)
@@ -64,9 +64,9 @@ class TwoTower(nn.Module):
             )
 
     def encode_candidate(self, cand_batch: dict) -> torch.Tensor:
-        t = self.cand_text(cand_batch["input_ids"], cand_batch["attention_mask"])  # [B,D]
+        t = self.cand_text(cand_batch["input_ids"], cand_batch["attention_mask"])
         if self.cand_feat_dim > 0:
-            f = self.cand_feat(cand_batch["features"])  # [B,64]
+            f = self.cand_feat(cand_batch["features"])
             t = self.fuse(torch.cat([t, f], dim=-1))
         return F.normalize(t, p=2, dim=-1)
 

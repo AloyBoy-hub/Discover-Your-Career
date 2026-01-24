@@ -1,4 +1,5 @@
 # learn embeddings so true pairs are close
+# train.py
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -8,7 +9,7 @@ from two_tower import TwoTower
 from data import PairDataset, TwoTowerCollate
 
 def info_nce_loss(cand_emb: torch.Tensor, job_emb: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
-    logits = cand_emb @ job_emb.T  # [B,B]
+    logits = cand_emb @ job_emb.T
     logits = logits / temperature
     labels = torch.arange(logits.size(0), device=logits.device)
     loss_i = F.cross_entropy(logits, labels)
@@ -17,13 +18,13 @@ def info_nce_loss(cand_emb: torch.Tensor, job_emb: torch.Tensor, temperature: fl
 
 def main():
     device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
-    pairs_df = pd.read_csv("data/pairs.csv")
-    cand_df  = pd.read_csv("data/candidates.csv")
-    job_df   = pd.read_csv("data/jobs.csv")
 
-    # Features
-    cand_feat_df = pd.read_csv("data/candidate_features.csv")
-    feat_dim = cand_feat_df.shape[1] - 1  # exclude candidate_id
+    pairs_df = pd.read_csv("data/pairs.csv")                 # candidate_id, job_id, label
+    cand_df  = pd.read_csv("data/candidates.csv")            # candidate_id, resume_text
+    job_df   = pd.read_csv("data/jobs.csv")                  # job_id, job_text
+
+    cand_feat_df = pd.read_csv("data/candidate_features.csv")  # candidate_id + numeric features
+    feat_dim = cand_feat_df.shape[1] - 1
 
     model_name = "distilbert-base-uncased"
     model = TwoTower(model_name=model_name, emb_dim=256, cand_feat_dim=feat_dim).to(device)
@@ -51,7 +52,7 @@ def main():
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
 
-            total += loss.item()
+            total += float(loss.item())
             if step % 50 == 0:
                 print(f"epoch={epoch} step={step} loss={loss.item():.4f}")
 
