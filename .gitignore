@@ -206,3 +206,12 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+
+data/*.csv
+*.pt
+*.pth
+*.npy
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
