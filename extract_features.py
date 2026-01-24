@@ -3,17 +3,16 @@ import re
 import pandas as pd
 import numpy as np
 
-SKILLS = [
-    # programming
-    "python", "java", "c++", "javascript", "typescript", "go", "sql",
-    # data/ml
-    "pytorch", "tensorflow", "sklearn", "scikit-learn", "pandas", "numpy",
-    "llm", "nlp",
-    # cloud/devops
-    "aws", "azure", "gcp", "docker", "kubernetes", "terraform", "jenkins",
-    # tools
-    "git", "linux", "excel",
-]
+import sys
+import os
+
+# Ensure backend module can be imported
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from backend.skill_extractor import extract_skills_from_text, SKILL_PATTERNS
+
+# Use the keys from our shared skill dictionary as the columns
+SKILLS = sorted(SKILL_PATTERNS.keys())
 
 EDU_LEVELS = ["phd", "doctor", "master", "bachelor", "diploma", "polytechnic"]
 
@@ -63,11 +62,11 @@ def extract_edu_level(text: str) -> int:
     return 0
 
 def skill_vector(text: str) -> np.ndarray:
-    t = normalize(text)
+    extracted_skills = set(extract_skills_from_text(text))
     vec = []
     for s in SKILLS:
-        # basic containment; you can upgrade to word-boundary matching later
-        vec.append(1.0 if s in t else 0.0)
+        # Check if the canonical skill name exists in what we found
+        vec.append(1.0 if s in extracted_skills else 0.0)
     return np.array(vec, dtype=np.float32)
 
 def main():
