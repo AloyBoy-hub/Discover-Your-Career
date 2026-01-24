@@ -9,13 +9,19 @@ export interface Job {
   location: string;
 }
 
+export interface RoadmapResource {
+  title: string;
+  url: string;
+  type: 'video' | 'article' | 'course' | 'tool';
+}
+
 export interface RoadmapStep {
   id: string;
   title: string;
   description: string;
   duration: string;
-  type: 'skill' | 'experience' | 'certification' | 'project';
-  status: 'current' | 'upcoming' | 'recommended';
+  tasks: string[];
+  resources: RoadmapResource[];
 }
 
 export const mockJobs: Job[] = [
@@ -122,110 +128,54 @@ export const mockJobs: Job[] = [
 ];
 
 export const getRoadmapForJob = (jobId: string): RoadmapStep[] => {
-  // Mock roadmap data - in a real app, this would be personalized based on CV
-  const roadmaps: Record<string, RoadmapStep[]> = {
-    '1': [
-      {
-        id: 's1',
-        title: 'Master Advanced TypeScript Patterns',
-        description: 'Learn generics, utility types, and advanced type manipulation to write more robust code',
-        duration: '2-3 months',
-        type: 'skill',
-        status: 'current'
-      },
-      {
-        id: 's2',
-        title: 'Build a Complex React Application',
-        description: 'Create a full-featured e-commerce platform using React, TypeScript, and modern state management',
-        duration: '1-2 months',
-        type: 'project',
-        status: 'upcoming'
-      },
-      {
-        id: 's3',
-        title: 'Learn Performance Optimization',
-        description: 'Deep dive into React performance, code splitting, lazy loading, and bundle optimization',
-        duration: '3-4 weeks',
-        type: 'skill',
-        status: 'upcoming'
-      },
-      {
-        id: 's4',
-        title: 'Contribute to Open Source',
-        description: 'Make meaningful contributions to popular React libraries to build credibility',
-        duration: '2-3 months',
-        type: 'experience',
-        status: 'recommended'
-      },
-      {
-        id: 's5',
-        title: 'Get AWS Certification',
-        description: 'Obtain AWS Certified Solutions Architect certification to understand cloud deployment',
-        duration: '1-2 months',
-        type: 'certification',
-        status: 'recommended'
-      }
-    ],
-    '2': [
-      {
-        id: 'f1',
-        title: 'Learn Node.js Backend Development',
-        description: 'Master Express.js, RESTful APIs, and backend architecture patterns',
-        duration: '2-3 months',
-        type: 'skill',
-        status: 'current'
-      },
-      {
-        id: 'f2',
-        title: 'Database Management with MongoDB',
-        description: 'Learn MongoDB, data modeling, indexing, and query optimization',
-        duration: '1-2 months',
-        type: 'skill',
-        status: 'upcoming'
-      },
-      {
-        id: 'f3',
-        title: 'Build Full Stack Application',
-        description: 'Create a MERN stack application from scratch with authentication and real-time features',
-        duration: '2-3 months',
-        type: 'project',
-        status: 'upcoming'
-      },
-      {
-        id: 'f4',
-        title: 'AWS Deployment & Infrastructure',
-        description: 'Learn to deploy and manage applications on AWS (EC2, S3, RDS)',
-        duration: '1 month',
-        type: 'skill',
-        status: 'recommended'
-      }
-    ]
-  };
-
-  return roadmaps[jobId] || [
+  // Mock roadmap data - enriched with tasks and resources
+  const roadmap: RoadmapStep[] = [
     {
-      id: 'default1',
-      title: 'Review Job Requirements',
-      description: 'Carefully analyze the job posting and identify skill gaps',
-      duration: '1 week',
-      type: 'skill',
-      status: 'current'
+      id: 'step1',
+      title: 'Skill Gap & Market Analysis',
+      duration: '1-2 weeks',
+      description: 'Analyze your current profile against market demands for this specific role.',
+      tasks: [
+        'Compare current CV skills with job requirements',
+        'Identify top 3 technical deficiencies',
+        'Research current industry salary benchmarks'
+      ],
+      resources: [
+        { title: 'Market Trends 2024', url: '#', type: 'article' },
+        { title: 'Salary Calculator', url: '#', type: 'tool' }
+      ]
     },
     {
-      id: 'default2',
-      title: 'Build Relevant Projects',
-      description: 'Create portfolio projects that demonstrate required skills',
+      id: 'step2',
+      title: 'Core Technical Integration',
       duration: '1-2 months',
-      type: 'project',
-      status: 'upcoming'
+      description: 'Master the primary tech stack required for this position.',
+      tasks: [
+        'Complete advanced certification in core technology',
+        'Build a production-ready feature using the required stack',
+        'Peer review code with industry experts'
+      ],
+      resources: [
+        { title: 'Advanced Mastery Course', url: '#', type: 'course' },
+        { title: 'Tech Stack Documentation', url: '#', type: 'article' }
+      ]
     },
     {
-      id: 'default3',
-      title: 'Network with Industry Professionals',
-      description: 'Connect with people working in similar roles',
-      duration: 'Ongoing',
-      type: 'experience',
-      status: 'recommended'
+      id: 'step3',
+      title: 'Professional Portfolio & Networking',
+      duration: '2-3 weeks',
+      description: 'Position yourself as a top candidate through visibility and networking.',
+      tasks: [
+        'Update LinkedIn profile with new certifications',
+        'Reach out to 5 recruiters in the target industry',
+        'Publish a technical blog post on a relevant topic'
+      ],
+      resources: [
+        { title: 'Networking Strategies', url: '#', type: 'video' },
+        { title: 'Portfolio Best Practices', url: '#', type: 'article' }
+      ]
     }
   ];
+
+  return roadmap;
 };
