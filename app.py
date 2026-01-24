@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from transformers import AutoTokenizer
@@ -38,18 +38,24 @@ DEPLOY_CFG_PATH = os.path.join(ART_DIR, "deploy_config.json")
 JOBS_CSV = "data/jobs.csv"
 TOPK_RETRIEVE_DEFAULT = 200
 
-# LLM rerank
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4.1-mini")
 LLM_TOPN = 10
 LLM_SNIPPET_CHARS = 320
 
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+
 
 # ============================================================
-# Feature extraction (MATCHES your extract_features.py)
+# Feature extraction (MATCHES extract_features.py)
 # ============================================================
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from backend.skill_extractor import extract_skills_from_text, SKILL_PATTERNS  # noqa: E402
-from backend.resume_parser import parse_resume # noqa: E402
+
+# Optional resume parser (file upload path)
+try:
+    from backend.resume_parser import parse_resume  # noqa: E402
+except Exception:
+    parse_resume = None
 
 SKILLS = sorted(SKILL_PATTERNS.keys())
 
@@ -125,6 +131,11 @@ def pick_device() -> str:
     return "cpu"
 
 
+def make_snippet(text: str, max_chars: int = 320) -> str:
+    t = (text or "").replace("\n", " ").replace("\r", " ").strip()
+    return t[:max_chars]
+
+
 def upper_triangle_abs_diff(values_10: List[float]) -> List[List[float]]:
     p = np.array(values_10, dtype=np.float32)
     M = np.zeros((10, 10), dtype=np.float32)
@@ -132,11 +143,6 @@ def upper_triangle_abs_diff(values_10: List[float]) -> List[List[float]]:
         for j in range(i + 1, 10):
             M[i, j] = abs(float(p[i] - p[j]))
     return M.tolist()
-
-
-def make_snippet(text: str, max_chars: int = 320) -> str:
-    t = (text or "").replace("\n", " ").replace("\r", " ").strip()
-    return t[:max_chars]
 
 
 @torch.no_grad()
@@ -176,12 +182,7 @@ def llm_available() -> bool:
     return OpenAI is not None and bool(os.getenv("OPENAI_API_KEY", "").strip())
 
 
-def llm_rerank_topk(
-    *,
-    user_extra: str,
-    jobs_payload: List[Dict[str, Any]],
-    top_n: int = 10,
-) -> Dict[str, Any]:
+def llm_rerank_topk(*, user_extra: str, jobs_payload: List[Dict[str, Any]], top_n: int = 10) -> Dict[str, Any]:
     if not llm_available():
         raise RuntimeError("LLM rerank requested but OPENAI_API_KEY or openai SDK is not available.")
 
@@ -225,7 +226,7 @@ def llm_rerank_topk(
 
 
 # ============================================================
-# FastAPI schemas (ALWAYS same shape)
+# Schemas (JSON route)
 # ============================================================
 class RecommendRequest(BaseModel):
     resume_text: str
@@ -236,16 +237,13 @@ class RecommendRequest(BaseModel):
 
 
 class RecommendResponse(BaseModel):
-    # Always present
-    top10: List[Tuple[str, str, float]]                 # (job_id, title, nn_prob)
-    ranked_job_ids: List[str]                           # length 10
-    preference_scores: List[float]                      # length 10
-    violations: List[List[str]]                         # length 10 (empty lists when no LLM)
-    reasons: List[str]                                  # length 10 ("" when no LLM)
+    top10: List[Tuple[str, str, float]]   # (job_id, title, nn_prob)
+    ranked_job_ids: List[str]             # len 10
+    preference_scores: List[float]        # len 10
+    violations: List[List[str]]           # len 10
+    reasons: List[str]                    # len 10
     relative_matrix: List[List[float]]
     device: str
-
-    # Metadata
     llm_used: bool = False
     llm_notes: str = ""
 
@@ -274,10 +272,7 @@ MAX_LEN = None
 
 
 # ============================================================
-# Lifespan
-# ============================================================
-# ============================================================
-# Lifespan (startup / shutdown)
+# Core recommend logic (shared)
 # ============================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
