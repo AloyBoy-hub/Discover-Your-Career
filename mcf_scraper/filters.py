@@ -1,0 +1,56 @@
+# List of generic or non-technical skills to exclude
+BUZZWORD_BLOCKLIST = {
+    "business intelligence",
+    "data analysis",
+    "data analytics",
+    "analytics",
+    "analysis",
+    "communication",
+    "communication skills",
+    "communications",
+    "teamwork",
+    "team player",
+    "problem solving",
+    "problem-solving",
+    "management",
+    "project management",
+    "leadership",
+    "microsoft office",
+    "microsoft word",
+    "microsoft powerpoint",
+    "microsoft excel", # Sometimes debatable, but often considered basic
+    "presentation skills",
+    "research",
+    "strategic planning",
+    "strategy",
+    "customer service",
+    "marketing",
+    "sales",
+    "operations",
+    "planning",
+    "writing",
+    "english",
+    "interpersonal skills",
+    "organizational skills",
+    "time management",
+    "detail oriented",
+    "attention to detail",
+    "critical thinking",
+    "analytical skills",
+    "analytical",
+    "reporting",
+    "business strategy",
+    "business development",
+    "change management",
+    "coaching",
+    "mentoring",
+    "negotiation",
+    "stakeholder management",
+    "process improvement",
+}
+
+def is_buzzword(skill_name: str) -> bool:
+    """Returns True if the skill is considered a buzzword."""
+    if not skill_name:
+        return True
+    return skill_name.lower().strip() in BUZZWORD_BLOCKLIST

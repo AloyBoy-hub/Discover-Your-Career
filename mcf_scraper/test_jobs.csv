@@ -1,0 +1,5 @@
+title,company,description,salary_min,salary_max,skills
+Frontend Developer,TechStartup SG,React and Redux wizard needed.,5000,8000,"React, JavaScript, CSS, Communication"
+Backend Engineer,Enterprise Corp,Java and Spring Boot.,6000,9000,"Java, Spring Boot, SQL, Business Intelligence"
+Data Scientist,AI Labs,Build models.,7000,12000,"Python, Machine Learning, TensorFlow, Microsoft Office"
+Hidden Skill Role,Stealth Startup,"We need a cloud engineer who knows AWS and Docker inside out. Kubernetes experience is preferred.",5000,9000,""
