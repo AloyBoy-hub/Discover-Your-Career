@@ -4,8 +4,10 @@ import { motion } from 'motion/react';
 import { Upload, FileText, Briefcase, ChevronRight, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
 import { Textarea } from '@/app/components/ui/textarea';
-import { Card, CardContent } from '@/app/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/app/components/ui/card';
 import { Label } from '@/app/components/ui/label';
+import { Badge } from '@/app/components/ui/badge';
+
 
 export function UploadPage() {
   const navigate = useNavigate();
@@ -29,43 +31,16 @@ export function UploadPage() {
       : [...array, item];
   };
   const handleAnalyze = async () => {
-    if (!file) {
-      alert("Please upload a file first.");
-      return;
-    }
-
     setLoading(true);
+    // Simulate processing
+    await new Promise(resolve => setTimeout(resolve, 1500));
 
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
+    // Store data in sessionStorage for the results page
+    sessionStorage.setItem('cvData', cvText);
+    sessionStorage.setItem('preferences', JSON.stringify(preferences));
 
-      // Call Backend to parse the CV
-      const response = await fetch('http://localhost:8000/parse_cv', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        alert("Failed to parse resume");
-        setLoading(false);
-        return;
-      }
-
-      const data = await response.json();
-
-      // Store extracted text in sessionStorage
-      sessionStorage.setItem('resume_text', data.text);
-      sessionStorage.setItem('preferences', JSON.stringify(preferences));
-
-      setLoading(false);
-      navigate('/survey');
-
-    } catch (error) {
-      console.error("Error parsing resume:", error);
-      alert("Failed to connect to backend. Make sure the server is running.");
-      setLoading(false);
-    }
+    setLoading(false);
+    navigate('/survey');
   };
 
   const handleFileUpload = (uploadedFile: File) => {
@@ -93,195 +68,265 @@ export function UploadPage() {
             <FileUpload onFileUpload={handleFileUpload} />
           </div>
 
-          {/* Career Preferences Form */}
-          <div className="bg-white rounded-2xl shadow-xl p-8">
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6">Career Preferences</h2>
+          <CareerPreferences onSubmit={(selectedFields) => {
+            setPreferences({ ...preferences, industry: selectedFields.join(', ') });
+            handleAnalyze();
+          }} />
 
-            <div className="space-y-4">
-              {/* Basic Filters */}
+          {/* Location Filters Section */}
+          <div className="border-t pt-4 mt-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">Location Preferences</h3>
+
+            <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Preferred Industry
+                  Country
                 </label>
                 <select
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white"
-                  value={preferences.industry}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setPreferences({ ...preferences, industry: e.target.value })}
+                  value={preferences.country}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setPreferences({ ...preferences, country: e.target.value, region: '' })}
                 >
-                  <option value="">Select an industry</option>
-                  <option value="technology">Technology</option>
-                  <option value="finance">Finance</option>
-                  <option value="healthcare">Healthcare</option>
-                  <option value="marketing">Marketing</option>
-                  <option value="education">Education</option>
-                  <option value="consulting">Consulting</option>
-                  <option value="retail">Retail</option>
-                  <option value="manufacturing">Manufacturing</option>
+                  <option value="">Any Country</option>
+                  {countryOptions.map(country => (
+                    <option key={country} value={country}>{country}</option>
+                  ))}
                 </select>
               </div>
 
-              {/* Location Filters Section */}
-              <div className="border-t pt-4 mt-6">
-                <h3 className="text-lg font-semibold text-gray-800 mb-4">Location Preferences</h3>
-
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Country
-                    </label>
-                    <select
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white"
-                      value={preferences.country}
-                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setPreferences({ ...preferences, country: e.target.value, region: '' })}
-                    >
-                      <option value="">Any Country</option>
-                      {countryOptions.map(country => (
-                        <option key={country} value={country}>{country}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Region/State
-                    </label>
-                    <select
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white"
-                      value={preferences.region}
-                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setPreferences({ ...preferences, region: e.target.value })}
-                      disabled={!preferences.country || !regionOptions[preferences.country]}
-                    >
-                      <option value="">Any Region</option>
-                      {preferences.country && regionOptions[preferences.country]?.map(region => (
-                        <option key={region} value={region}>{region}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="mt-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Specific City/Location (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g., San Francisco, London, Remote"
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-                    value={preferences.location}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPreferences({ ...preferences, location: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              {/* Role Type Filter */}
-              <div className="border-t pt-4 mt-6">
-                <h3 className="text-lg font-semibold text-gray-800 mb-4">Role Type</h3>
-                <div className="flex flex-wrap gap-2">
-                  {roleTypeOptions.map(type => (
-                    <button
-                      key={type}
-                      onClick={() => setPreferences({
-                        ...preferences,
-                        roleType: toggleArrayItem(preferences.roleType, type)
-                      })}
-                      className={`px-4 py-2 rounded-lg font-medium transition-all ${preferences.roleType.includes(type)
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Advanced Filters Toggle */}
-              <div className="border-t pt-4 mt-6">
-                <button
-                  onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-                  className="flex items-center justify-between w-full text-left"
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Region/State
+                </label>
+                <select
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white"
+                  value={preferences.region}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setPreferences({ ...preferences, region: e.target.value })}
+                  disabled={!preferences.country || !regionOptions[preferences.country]}
                 >
-                  <h3 className="text-lg font-semibold text-gray-800">Advanced Filters</h3>
-                  <ChevronRight className={`w-5 h-5 text-gray-600 transition-transform ${showAdvancedFilters ? 'rotate-90' : ''}`} />
-                </button>
-
-                {showAdvancedFilters && (
-                  <div className="mt-4 space-y-6">
-                    {/* Technical Stack Filter */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-3">
-                        Technical Stack / Programming Languages
-                      </label>
-                      <p className="text-xs text-gray-500 mb-3">Select the technologies you want to work with</p>
-                      <div className="flex flex-wrap gap-2 max-h-64 overflow-y-auto p-2 border border-gray-200 rounded-lg">
-                        {techStackOptions.map(tech => (
-                          <button
-                            key={tech}
-                            onClick={() => setPreferences({
-                              ...preferences,
-                              techStack: toggleArrayItem(preferences.techStack, tech)
-                            })}
-                            className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${preferences.techStack.includes(tech)
-                              ? 'bg-purple-600 text-white'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                              }`}
-                          >
-                            {tech}
-                          </button>
-                        ))}
-                      </div>
-                      {preferences.techStack.length > 0 && (
-                        <p className="text-xs text-indigo-600 mt-2">
-                          {preferences.techStack.length} selected
-                        </p>
-                      )}
-                    </div>
-
-                    {/* Confident Skills Filter */}
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-3">
-                        Skills You're Confident In
-                      </label>
-                      <p className="text-xs text-gray-500 mb-3">Select skills where you have strong proficiency</p>
-                      <div className="flex flex-wrap gap-2 max-h-64 overflow-y-auto p-2 border border-gray-200 rounded-lg">
-                        {skillsOptions.map(skill => (
-                          <button
-                            key={skill}
-                            onClick={() => setPreferences({
-                              ...preferences,
-                              confidentSkills: toggleArrayItem(preferences.confidentSkills, skill)
-                            })}
-                            className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${preferences.confidentSkills.includes(skill)
-                              ? 'bg-green-600 text-white'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                              }`}
-                          >
-                            {skill}
-                          </button>
-                        ))}
-                      </div>
-                      {preferences.confidentSkills.length > 0 && (
-                        <p className="text-xs text-green-600 mt-2">
-                          {preferences.confidentSkills.length} selected
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )}
+                  <option value="">Any Region</option>
+                  {preferences.country && regionOptions[preferences.country]?.map(region => (
+                    <option key={region} value={region}>{region}</option>
+                  ))}
+                </select>
               </div>
             </div>
 
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Specific City/Location (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder="e.g., San Francisco, London, Remote"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                value={preferences.location}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setPreferences({ ...preferences, location: e.target.value })}
+              />
+            </div>
+          </div>
+
+          {/* Role Type Filter */}
+          <div className="border-t pt-4 mt-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-4">Role Type</h3>
+            <div className="flex flex-wrap gap-2">
+              {roleTypeOptions.map(type => (
+                <button
+                  key={type}
+                  onClick={() => setPreferences({
+                    ...preferences,
+                    roleType: toggleArrayItem(preferences.roleType, type)
+                  })}
+                  className={`px-4 py-2 rounded-lg font-medium transition-all ${preferences.roleType.includes(type)
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Advanced Filters Toggle */}
+          <div className="border-t pt-4 mt-6">
             <button
-              onClick={handleAnalyze}
-              disabled={!file || loading}
-              className="w-full mt-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 rounded-lg font-semibold hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+              className="flex items-center justify-between w-full text-left"
             >
-              {loading ? 'Analyzing CV...' : 'Next'}
+              <h3 className="text-lg font-semibold text-gray-800">Advanced Filters</h3>
+              <ChevronRight className={`w-5 h-5 text-gray-600 transition-transform ${showAdvancedFilters ? 'rotate-90' : ''}`} />
             </button>
+
+            {showAdvancedFilters && (
+              <div className="mt-4 space-y-6">
+                {/* Technical Stack Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Technical Stack / Programming Languages
+                  </label>
+                  <p className="text-xs text-gray-500 mb-3">Select the technologies you want to work with</p>
+                  <div className="flex flex-wrap gap-2 max-h-64 overflow-y-auto p-2 border border-gray-200 rounded-lg">
+                    {techStackOptions.map(tech => (
+                      <button
+                        key={tech}
+                        onClick={() => setPreferences({
+                          ...preferences,
+                          techStack: toggleArrayItem(preferences.techStack, tech)
+                        })}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${preferences.techStack.includes(tech)
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                      >
+                        {tech}
+                      </button>
+                    ))}
+                  </div>
+                  {preferences.techStack.length > 0 && (
+                    <p className="text-xs text-indigo-600 mt-2">
+                      {preferences.techStack.length} selected
+                    </p>
+                  )}
+                </div>
+
+                {/* Confident Skills Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Skills You're Confident In
+                  </label>
+                  <p className="text-xs text-gray-500 mb-3">Select skills where you have strong proficiency</p>
+                  <div className="flex flex-wrap gap-2 max-h-64 overflow-y-auto p-2 border border-gray-200 rounded-lg">
+                    {skillsOptions.map(skill => (
+                      <button
+                        key={skill}
+                        onClick={() => setPreferences({
+                          ...preferences,
+                          confidentSkills: toggleArrayItem(preferences.confidentSkills, skill)
+                        })}
+                        className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${preferences.confidentSkills.includes(skill)
+                          ? 'bg-green-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                      >
+                        {skill}
+                      </button>
+                    ))}
+                  </div>
+                  {preferences.confidentSkills.length > 0 && (
+                    <p className="text-xs text-green-600 mt-2">
+                      {preferences.confidentSkills.length} selected
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
+
+        <button
+          onClick={handleAnalyze}
+          disabled={!file || loading}
+          className="w-full mt-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 rounded-lg font-semibold hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        >
+          {loading ? 'Analyzing CV...' : 'Next'}
+        </button>
       </div>
     </div>
+  );
+}
+
+const CAREER_FIELDS = [
+  { id: 'tech', label: 'Technology & IT', icon: '💻' },
+  { id: 'business', label: 'Business & Finance', icon: '💼' },
+  { id: 'creative', label: 'Creative & Design', icon: '🎨' },
+  { id: 'healthcare', label: 'Healthcare & Medicine', icon: '🏥' },
+  { id: 'education', label: 'Education & Training', icon: '📚' },
+  { id: 'engineering', label: 'Engineering', icon: '⚙️' },
+  { id: 'sales', label: 'Sales & Marketing', icon: '📈' },
+  { id: 'science', label: 'Science & Research', icon: '🔬' },
+  { id: 'legal', label: 'Legal & Compliance', icon: '⚖️' },
+  { id: 'media', label: 'Media & Communications', icon: '📱' },
+];
+
+interface CareerPreferencesProps {
+  onSubmit: (preferences: string[]) => void;
+}
+
+export function CareerPreferences({ onSubmit }: CareerPreferencesProps) {
+  const [selected, setSelected] = useState<string[]>([]);
+
+  const toggleSelection = (id: string) => {
+    setSelected(prev =>
+      prev.includes(id)
+        ? prev.filter(item => item !== id)
+        : [...prev, id]
+    );
+  };
+
+  const handleSubmit = () => {
+    if (selected.length > 0) {
+      onSubmit(selected);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay: 0.2 }}
+    >
+      <Card className="shadow-xl border-none">
+        <CardHeader>
+          <CardTitle className="text-2xl font-bold">Career Preferences</CardTitle>
+          <CardDescription className="text-md">
+            Select one or more fields that interest you (you can select multiple)
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-8">
+            {CAREER_FIELDS.map((field, index) => (
+              <motion.div
+                key={field.id}
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ duration: 0.3, delay: index * 0.05 }}
+              >
+                <div
+                  className={`
+                    w-full h-28 flex flex-col items-center justify-center gap-3 cursor-pointer rounded-2xl border-2
+                    transition-all duration-300 hover:scale-105 active:scale-95
+                    ${selected.includes(field.id)
+                      ? 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white border-transparent shadow-lg shadow-indigo-200'
+                      : 'border-gray-100 hover:border-indigo-300 bg-white shadow-sm'
+                    }
+                  `}
+                  onClick={() => toggleSelection(field.id)}
+                >
+                  <span className="text-3xl">{field.icon}</span>
+                  <span className="text-xs font-bold text-center px-2">{field.label}</span>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+
+          <div className="flex items-center justify-between pt-6 border-t border-gray-50">
+            <p className="text-sm font-medium text-gray-500">
+              {selected.length} field{selected.length !== 1 ? 's' : ''} selected
+            </p>
+            <Button
+              onClick={handleSubmit}
+              disabled={selected.length === 0}
+              size="lg"
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-8 py-6 rounded-2xl shadow-lg shadow-indigo-100 gap-2 transition-all disabled:opacity-30"
+            >
+              Continue
+              <ChevronRight className="w-5 h-5" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </motion.div>
   );
 }
 
@@ -349,7 +394,7 @@ function FileUpload({ onFileUpload }: FileUploadProps) {
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
-            onSubmit={(e: React.FormEvent) => e.preventDefault()}
+            onSubmit={(e) => e.preventDefault()}
           >
             <input
               type="file"
