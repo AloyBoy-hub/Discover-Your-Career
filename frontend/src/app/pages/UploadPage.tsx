@@ -1,9 +1,10 @@
-import { useState, DragEvent, ChangeEvent } from 'react';
+import React, { useState, ChangeEvent, DragEvent } from 'react';
 import { useNavigate } from 'react-router';
-import { Upload, FileText, Briefcase, ChevronRight } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Upload, FileText, Briefcase, ChevronRight, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
 import { Textarea } from '@/app/components/ui/textarea';
-import { Card } from '@/app/components/ui/card';
+import { Card, CardContent } from '@/app/components/ui/card';
 import { Label } from '@/app/components/ui/label';
 
 export function UploadPage() {
@@ -20,7 +21,6 @@ export function UploadPage() {
   });
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
 
   const toggleArrayItem = (array: string[], item: string) => {
@@ -28,87 +28,22 @@ export function UploadPage() {
       ? array.filter((i) => i !== item)
       : [...array, item];
   };
+  const handleAnalyze = async () => {
+    setLoading(true);
+    // Simulate processing
+    await new Promise(resolve => setTimeout(resolve, 1500));
 
-  const handleDrag = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  };
+    // Store data in sessionStorage for the results page
+    sessionStorage.setItem('cvData', cvText);
+    sessionStorage.setItem('preferences', JSON.stringify(preferences));
 
-  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFileUpload(e.dataTransfer.files[0]);
-    }
+    setLoading(false);
+    navigate('/survey');
   };
 
   const handleFileUpload = (uploadedFile: File) => {
     setFile(uploadedFile);
-    // In a real app we would parse the file here. 
-    // For now we assume the results page will handle it or we pass metadata.
     setCvText(`File: ${uploadedFile.name}`);
-  };
-
-  const handleAnalyze = async () => {
-    if (!file) {
-      alert("Please upload a file first.");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('resume_text', '');
-      formData.append('top_k_retrieve', '200');
-      formData.append('use_llm_rerank', 'true');
-
-      // Add preferences as extra info for LLM reranker
-      const extraInfo = `
-        Industry: ${preferences.industry}
-        Prefer Country: ${preferences.country}
-        Region: ${preferences.region}
-        Location: ${preferences.location}
-        Role Types: ${preferences.roleType.join(', ')}
-        Tech Stack Interests: ${preferences.techStack.join(', ')}
-        Confident Skills: ${preferences.confidentSkills.join(', ')}
-      `;
-      formData.append('extra_info', extraInfo);
-
-      // Call Backend
-      const response = await fetch('http://localhost:8000/recommend', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.detail || 'Analysis failed');
-      }
-
-      const data = await response.json();
-      console.log("Analysis Result:", data);
-
-      // Store results in sessionStorage
-      sessionStorage.setItem('cvData', `File: ${file.name}`); // Display name
-      sessionStorage.setItem('recommendationResults', JSON.stringify(data));
-      sessionStorage.setItem('preferences', JSON.stringify(preferences));
-
-      setLoading(false);
-      navigate('/results');
-
-    } catch (error: any) {
-      console.error("Error analyzing:", error);
-      alert(`Error: ${error.message}`);
-      setLoading(false);
-    }
   };
 
   return (
@@ -126,38 +61,9 @@ export function UploadPage() {
         </div>
 
         <div className="max-w-4xl mx-auto space-y-6">
-          {/* CV Input Card */}
-          {/* CV Input Card - Replaced with File Upload */}
-          <div className="bg-white rounded-2xl shadow-xl p-8 mb-6">
-            <h2 className="text-2xl font-semibold text-gray-800 mb-6">Upload Your CV</h2>
-
-            <div
-              className={`border-3 border-dashed rounded-xl p-12 text-center transition-all ${dragActive ? 'border-indigo-500 bg-indigo-50' : 'border-gray-300 hover:border-indigo-400'
-                }`}
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-            >
-              <Upload className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <p className="text-lg text-gray-700 mb-2">
-                {file ? file.name : 'Drag and drop your CV here'}
-              </p>
-              <p className="text-sm text-gray-500 mb-4">Supports PDF and Word documents (Word recommended for best results)</p>
-              <input
-                type="file"
-                id="cv-upload"
-                className="hidden"
-                accept=".pdf,.doc,.docx,.txt"
-                onChange={(e: ChangeEvent<HTMLInputElement>) => e.target.files && handleFileUpload(e.target.files[0])}
-              />
-              <label
-                htmlFor="cv-upload"
-                className="inline-block bg-indigo-600 text-white px-6 py-3 rounded-lg cursor-pointer hover:bg-indigo-700 transition-colors"
-              >
-                Choose File
-              </label>
-            </div>
+          {/* CV Input Card - Replaced with Premium File Upload */}
+          <div className="mb-6">
+            <FileUpload onFileUpload={handleFileUpload} />
           </div>
 
           {/* Career Preferences Form */}
@@ -343,12 +249,145 @@ export function UploadPage() {
               disabled={!file || loading}
               className="w-full mt-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 rounded-lg font-semibold hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
             >
-              {loading ? 'Analyzing CV...' : 'Analyze'}
+              {loading ? 'Analyzing CV...' : 'Next'}
             </button>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+interface FileUploadProps {
+  onFileUpload: (file: File) => void;
+}
+
+function FileUpload({ onFileUpload }: FileUploadProps) {
+  const [dragActive, setDragActive] = useState(false);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+
+  const handleDrag = (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      handleFile(file);
+    }
+  };
+
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    if (e.target.files && e.target.files[0]) {
+      handleFile(e.target.files[0]);
+    }
+  };
+
+  const handleFile = (file: File) => {
+    const validTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+
+    if (validTypes.includes(file.type)) {
+      setUploadedFile(file);
+      onFileUpload(file);
+    } else {
+      alert('Please upload a PDF or Word document');
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+    >
+      <Card className="border-2 border-dashed transition-all duration-300 hover:border-indigo-400 bg-white">
+        <CardContent className="p-8">
+          <form
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+            onSubmit={(e) => e.preventDefault()}
+          >
+            <input
+              type="file"
+              id="file-upload"
+              className="hidden"
+              accept=".pdf,.doc,.docx"
+              onChange={handleChange}
+            />
+
+            <label
+              htmlFor="file-upload"
+              className={`flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${dragActive ? 'scale-105' : ''
+                }`}
+            >
+              {uploadedFile ? (
+                <motion.div
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  className="flex flex-col items-center gap-4"
+                >
+                  <CheckCircle2 className="w-16 h-16 text-green-500" />
+                  <div className="flex items-center gap-2 text-lg">
+                    <FileText className="w-5 h-5" />
+                    <span className="font-medium">{uploadedFile.name}</span>
+                  </div>
+                  <p className="text-sm text-gray-500">
+                    {(uploadedFile.size / 1024).toFixed(2)} KB
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setUploadedFile(null);
+                    }}
+                  >
+                    Change File
+                  </Button>
+                </motion.div>
+              ) : (
+                <div className="flex flex-col items-center gap-4">
+                  <motion.div
+                    animate={{ y: [0, -10, 0] }}
+                    transition={{ duration: 2, repeat: Infinity }}
+                  >
+                    <Upload className="w-16 h-16 text-indigo-500" />
+                  </motion.div>
+                  <div className="text-center">
+                    <p className="text-lg font-semibold mb-2">
+                      Upload your CV/Resume
+                    </p>
+                    <p className="text-sm text-gray-500 mb-4">
+                      Drag and drop or click to browse
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Supported formats: PDF, DOC, DOCX
+                    </p>
+                  </div>
+                </div>
+              )}
+            </label>
+          </form>
+        </CardContent>
+      </Card>
+    </motion.div>
   );
 }
 
