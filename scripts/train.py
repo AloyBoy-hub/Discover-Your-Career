@@ -4,6 +4,11 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import sys
+import os
+
+# Ensure root modules (data, two_tower) can be imported
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from two_tower import TwoTower
 from data import PairDataset, TwoTowerCollate
