@@ -1,6 +1,6 @@
-# Job Roadmapper
+# Career Roadmapper
 
-This repository hosts the backend and AI models for a Job Roadmapper, a system designed to match candidates with jobs using a Two-Tower embedding model and LLM-based reranking. This was done as part of the Techfest 2026 hackathon hosted by NTU SCDS Club.
+This repository hosts the backend and AI models for a Career Roadmapper, a system designed to match candidates with jobs using a Two-Tower embedding model and LLM-based reranking. This was done as part of the Techfest 2026 hackathon hosted by NTU SCDS Club.
 
 ## Components
 - **FastAPI Backend**: `app.py` serves model predictions and parsed resumes.
