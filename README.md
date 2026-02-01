@@ -56,7 +56,7 @@ The backend is built with FastAPI.
 
 1.  **Navigate to the root directory**:
     ```bash
-    cd career-roadmapper
+    cd Discover-Your-Career
     ```
 
 2.  **Create a Virtual Environment** (Recommended):
