@@ -1,12 +1,12 @@
 import { motion } from 'motion/react';
 import { useNavigate } from 'react-router';
-import { Job } from '@/app/data/jobsData';
+import { JobResult } from '@/app/context/FormContext';
 import { Card } from '@/app/components/ui/card';
 import { Badge } from '@/app/components/ui/badge';
 import { MapPin, TrendingUp } from 'lucide-react';
 
 interface SpreadingActivationVizProps {
-  jobs: Job[];
+  jobs: JobResult[];
 }
 
 export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
@@ -23,7 +23,7 @@ export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
   const getPosition = (index: number, total: number) => {
     // Top match (highest score) - placed directly below center
     if (index === 0) {
-      return { x: centerX - 4 , y: centerY, angle:90 }; // Anchored relative to the master center
+      return { x: centerX - 4, y: centerY, angle: 90 }; // Anchored relative to the master center
     }
 
     // Remaining jobs arranged in a circle
@@ -35,7 +35,7 @@ export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
 
     const radians = (angle * Math.PI) / 180;
     return {
-      x: centerX + radius * Math.cos(radians) -3, // Shifts relative to centerX
+      x: centerX + radius * Math.cos(radians) - 3, // Shifts relative to centerX
       y: centerY + radius * Math.sin(radians), // Shifts relative to centerY
     };
   };
@@ -61,9 +61,9 @@ export function SpreadingActivationViz({ jobs }: SpreadingActivationVizProps) {
           return (
             <motion.line
               key={job.id}
-              x1={`${centerX+3}%`}
-              y1={`${centerY+8}%`} // Lines start from the shifted center
-              x2={`${pos.x+8}%`}
+              x1={`${centerX + 3}%`}
+              y1={`${centerY + 8}%`} // Lines start from the shifted center
+              x2={`${pos.x + 8}%`}
               y2={`${pos.y}%`}
               stroke="url(#lineGradient)"
               strokeWidth={index === 0 ? "4" : "2"}

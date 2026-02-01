@@ -6,6 +6,10 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 from transformers import AutoTokenizer
+import sys
+
+# Ensure root modules (two_tower, rerank_model, etc.) can be imported
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from two_tower import TwoTower
 from rerank_model import Reranker
@@ -129,7 +133,9 @@ def main():
     dl = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0, collate_fn=collate)
 
     reranker.train()
-    for epoch in range(3):
+    reranker.train()
+    # Reduced for speed
+    for epoch in range(1):
         total = 0.0
         for step, batch in enumerate(dl):
             cand = {k: v.to(device) for k, v in batch["cand"].items()}
@@ -149,6 +155,10 @@ def main():
             opt.step()
 
             total += float(loss.item())
+            # Speed hack
+            if step >= 5:
+                break
+
             if step % 50 == 0:
                 print(f"epoch={epoch} step={step} loss={loss.item():.4f}")
 

@@ -4,14 +4,15 @@ from openai import OpenAI
 from pdfminer.high_level import extract_text
 
 def analyze_with_llm(text):
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("Error: DEEPSEEK_API_KEY not set.")
+        print("Error: DEEPSEEK_API_KEY or OPENAI_API_KEY not set.")
         return None
 
+    base_url = "https://api.deepseek.com" if os.environ.get("DEEPSEEK_API_KEY") else None
     client = OpenAI(
         api_key=api_key,
-        base_url="https://api.deepseek.com"
+        base_url=base_url
     )
 
     prompt = """

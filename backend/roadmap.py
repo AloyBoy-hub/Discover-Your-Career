@@ -6,6 +6,9 @@ from openai import OpenAI
 # Base URL for roadmap.sh raw data
 GITHUB_BASE = "https://raw.githubusercontent.com/kamranahmedse/developer-roadmap/master/src/data/roadmaps"
 
+# Helper to get client
+from typing import Optional
+
 # Mapping of common roles to the ID used in the repo
 ROLE_MAPPING = {
     "frontend": "frontend",
@@ -44,15 +47,21 @@ def fetch_roadmap_json(role_slug):
         print(f"Error fetching raw roadmap: {e}")
         return None
 
-def generate_roadmap(current_skills: list[str], target_role: str):
+def generate_roadmap(current_skills: list[str], target_role: str, client: Optional[OpenAI] = None):
     """
     1. Fetches official roadmap JSON.
     2. Uses LLM to check which topics user already knows.
     3. Annotates the JSON nodes with 'status': 'completed' | 'pending'.
     """
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    # 1. Resolve API Key and Base URL
+    api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        return {"error": "DEEPSEEK_API_KEY not set"}
+        return {"error": "API Key (DEEPSEEK_API_KEY or OPENAI_API_KEY) not set"}
+
+    # Use provided client or create one based on available key
+    if client is None:
+        base_url = "https://api.deepseek.com" if os.environ.get("DEEPSEEK_API_KEY") else None
+        client = OpenAI(api_key=api_key, base_url=base_url)
 
     # 1. Resolve Role ID
     role_slug = ROLE_MAPPING.get(target_role.lower())
@@ -79,10 +88,7 @@ def generate_roadmap(current_skills: list[str], target_role: str):
     
     # If list is too huge, we might need to chunk, but typically roadmaps have <200 nodes.
     
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://api.deepseek.com"
-    )
+    # Removed redundant client instantiation to avoid NameError and reuse previous setup
     
     prompt = f"""
     You are a Career Architect.
@@ -112,9 +118,11 @@ def generate_roadmap(current_skills: list[str], target_role: str):
     }}
     """
     
+    model_name = "deepseek-chat" if os.environ.get("DEEPSEEK_API_KEY") else "gpt-4o-mini"
+
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model=model_name,
             messages=[
                 {"role": "system", "content": "You are a helpful career architect that outputs strict JSON."},
                 {"role": "user", "content": prompt}

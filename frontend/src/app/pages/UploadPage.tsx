@@ -3,46 +3,34 @@ import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { Upload, FileText, Briefcase, ChevronRight, CheckCircle2 } from 'lucide-react';
 import { Button } from '@/app/components/ui/button';
-import { Textarea } from '@/app/components/ui/textarea';
 import { Card, CardContent } from '@/app/components/ui/card';
-import { Label } from '@/app/components/ui/label';
+import { useFormContext } from '@/app/context/FormContext';
 
 export function UploadPage() {
   const navigate = useNavigate();
-  const [cvText, setCvText] = useState('');
-  const [preferences, setPreferences] = useState({
-    industry: '',
-    country: '',
-    region: '',
-    location: '',
-    roleType: [] as string[],
-    techStack: [] as string[],
-    confidentSkills: [] as string[],
-  });
+  const { state, setCvFile, setCvText, updatePreference } = useFormContext();
+  const { preferences, cvFile } = state;
+
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
 
   const toggleArrayItem = (array: string[], item: string) => {
     return array.includes(item)
       ? array.filter((i) => i !== item)
       : [...array, item];
   };
+
   const handleAnalyze = async () => {
     setLoading(true);
     // Simulate processing
     await new Promise(resolve => setTimeout(resolve, 1500));
-
-    // Store data in sessionStorage for the results page
-    sessionStorage.setItem('cvData', cvText);
-    sessionStorage.setItem('preferences', JSON.stringify(preferences));
 
     setLoading(false);
     navigate('/survey');
   };
 
   const handleFileUpload = (uploadedFile: File) => {
-    setFile(uploadedFile);
+    setCvFile(uploadedFile);
     setCvText(`File: ${uploadedFile.name}`);
   };
 
@@ -79,7 +67,7 @@ export function UploadPage() {
                 <select
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white"
                   value={preferences.industry}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setPreferences({ ...preferences, industry: e.target.value })}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => updatePreference('industry', e.target.value)}
                 >
                   <option value="">Select an industry</option>
                   <option value="technology">Technology</option>
@@ -105,7 +93,10 @@ export function UploadPage() {
                     <select
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white"
                       value={preferences.country}
-                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setPreferences({ ...preferences, country: e.target.value, region: '' })}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                        updatePreference('country', e.target.value);
+                        updatePreference('region', '');
+                      }}
                     >
                       <option value="">Any Country</option>
                       {countryOptions.map(country => (
@@ -121,7 +112,7 @@ export function UploadPage() {
                     <select
                       className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white"
                       value={preferences.region}
-                      onChange={(e: ChangeEvent<HTMLSelectElement>) => setPreferences({ ...preferences, region: e.target.value })}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => updatePreference('region', e.target.value)}
                       disabled={!preferences.country || !regionOptions[preferences.country]}
                     >
                       <option value="">Any Region</option>
@@ -141,7 +132,7 @@ export function UploadPage() {
                     placeholder="e.g., San Francisco, London, Remote"
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                     value={preferences.location}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setPreferences({ ...preferences, location: e.target.value })}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => updatePreference('location', e.target.value)}
                   />
                 </div>
               </div>
@@ -153,10 +144,7 @@ export function UploadPage() {
                   {roleTypeOptions.map(type => (
                     <button
                       key={type}
-                      onClick={() => setPreferences({
-                        ...preferences,
-                        roleType: toggleArrayItem(preferences.roleType, type)
-                      })}
+                      onClick={() => updatePreference('roleType', toggleArrayItem(preferences.roleType, type))}
                       className={`px-4 py-2 rounded-lg font-medium transition-all ${preferences.roleType.includes(type)
                         ? 'bg-indigo-600 text-white'
                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -190,10 +178,7 @@ export function UploadPage() {
                         {techStackOptions.map(tech => (
                           <button
                             key={tech}
-                            onClick={() => setPreferences({
-                              ...preferences,
-                              techStack: toggleArrayItem(preferences.techStack, tech)
-                            })}
+                            onClick={() => updatePreference('techStack', toggleArrayItem(preferences.techStack, tech))}
                             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${preferences.techStack.includes(tech)
                               ? 'bg-purple-600 text-white'
                               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -220,10 +205,7 @@ export function UploadPage() {
                         {skillsOptions.map(skill => (
                           <button
                             key={skill}
-                            onClick={() => setPreferences({
-                              ...preferences,
-                              confidentSkills: toggleArrayItem(preferences.confidentSkills, skill)
-                            })}
+                            onClick={() => updatePreference('confidentSkills', toggleArrayItem(preferences.confidentSkills, skill))}
                             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-all ${preferences.confidentSkills.includes(skill)
                               ? 'bg-green-600 text-white'
                               : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
@@ -246,7 +228,7 @@ export function UploadPage() {
 
             <button
               onClick={handleAnalyze}
-              disabled={!file || loading}
+              disabled={!cvFile || loading}
               className="w-full mt-6 bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-4 rounded-lg font-semibold hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
             >
               {loading ? 'Analyzing CV...' : 'Next'}

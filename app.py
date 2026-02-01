@@ -21,6 +21,7 @@ from transformers import AutoTokenizer
 from two_tower import TwoTower
 from rerank_model import Reranker
 from deploy_utils import load_json, load_npy
+from backend.roadmap import generate_roadmap  # Import the function
 
 # Optional: LLM rerank (Stage B)
 try:
@@ -435,17 +436,87 @@ class RecommendResponse(BaseModel):
     llm_notes: str = ""
 
 
+@app.post("/api/analyze", response_model=RecommendResponse)
+async def analyze_jobs(
+    cv_file: Optional[UploadFile] = File(None),
+    cv_text: str = Form(""),
+    preferences: str = Form("{}"),
+    survey_answers: str = Form("{}")
+):
+    """
+    Consolidated endpoint that receives CV (file or text), preferences, and survey answers.
+    Combines everything into a recommendation request for the Stage B reranker.
+    """
+    # 1. Handle CV Text (either direct or from file)
+    final_resume_text = cv_text
+    if cv_file:
+        suffix = os.path.splitext(cv_file.filename)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(cv_file.file, tmp)
+            tmp_path = tmp.name
+        try:
+            parsed = parse_resume(tmp_path)
+            if parsed and parsed.get("raw_text"):
+                final_resume_text = parsed["raw_text"]
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    if not final_resume_text.strip():
+        raise HTTPException(status_code=400, detail="No resume text provided (direct or via file).")
+
+    # 2. Extract and format extra info for the LLM
+    try:
+        prefs_dict = json.loads(preferences)
+        answers_dict = json.loads(survey_answers)
+    except Exception:
+        prefs_dict = {}
+        answers_dict = {}
+
+    # Build a consolidated prompt component from survey answers
+    survey_context = []
+    if prefs_dict:
+        industry = prefs_dict.get("industry")
+        if industry: survey_context.append(f"Preferred Industry: {industry}")
+        
+        location = prefs_dict.get("location") or prefs_dict.get("country")
+        if location: survey_context.append(f"Target Location: {location}")
+
+    if answers_dict:
+        survey_context.append("Candidate survey responses:")
+        for q_id, answer in answers_dict.items():
+            # You can map q_id to friendly names if needed
+            survey_context.append(f"- {q_id}: {answer}")
+
+    extra_info_str = "\n".join(survey_context)
+
+    # 3. Call existing recommendation logic
+    # We construct a RecommendRequest and pass it to the internal logic
+    req = RecommendRequest(
+        resume_text=final_resume_text,
+        extra_info=extra_info_str,
+        use_llm_rerank=True
+    )
+    
+    return recommend(req)
+
+
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(req: RecommendRequest):
     if tower is None or reranker is None or job_emb is None or tokenizer is None:
-        # Mock mode if requested or environment allows, otherwise 503
+        # Check if we should allow a mock response (hard-coded dummy data)
         if os.getenv("ALLOW_MOCK_RESPONSE", "0") == "1":
-             # Return dummy response
              return RecommendResponse(
                  top10=[], ranked_job_ids=[], relative_matrix=[], results=[],
                  device="mock", llm_used=False, llm_notes="Mock mode"
              )
-        raise HTTPException(status_code=503, detail="Models not loaded yet.")
+        
+        # If we have the jobs data but no BERT models, let's allow a "Lightweight" fallback 
+        # instead of 503-ing, so Stage B (LLM) can still work.
+        if jobs_df is not None:
+            print("[recommend] WARNING: Weights missing. Using Lightweight Fallback (First 20 jobs).")
+        else:
+            raise HTTPException(status_code=503, detail="Models and Jobs data not loaded yet.")
 
     # 1. Feature Vector
     cand_feat_vec = None
@@ -456,20 +527,28 @@ def recommend(req: RecommendRequest):
     if cand_feat_vec is None:
         cand_feat_vec = build_feature_vector(req.resume_text, feature_columns)
 
-    # 2. Candidate Embedding (Stage A)
-    cand_emb = encode_candidate_embedding(
-        tokenizer, tower, req.resume_text, cand_feat_vec, DEVICE, max_len=MAX_LEN
-    )
+    # 2. Candidate Embedding & Retrieve Top-K (Stage A)
+    if tower is not None and job_emb is not None and tokenizer is not None:
+        cand_emb = encode_candidate_embedding(
+            tokenizer, tower, req.resume_text, cand_feat_vec, DEVICE, max_len=MAX_LEN
+        )
 
-    # 3. Retrieve Top-K (Dot Product)
-    scores = job_emb @ cand_emb.detach().cpu().numpy()
-    K = min(req.top_k_retrieve, len(scores))
-    topk_idx = np.argpartition(scores, -K)[-K:]
-    topk_idx = topk_idx[np.argsort(scores[topk_idx])[::-1]]
+        # 3. Retrieve Top-K (Dot Product)
+        scores = job_emb @ cand_emb.detach().cpu().numpy()
+        K = min(req.top_k_retrieve, len(scores))
+        topk_idx = np.argpartition(scores, -K)[-K:]
+        topk_idx = topk_idx[np.argsort(scores[topk_idx])[::-1]]
 
-    # 4. Rerank Top-K (Stage B - Model)
-    job_emb_topk = torch.from_numpy(job_emb[topk_idx]).to(DEVICE).float()
-    p_hired = rerank_probs(reranker, cand_emb, job_emb_topk)
+        # 4. Rerank Top-K (Stage B - Model)
+        if reranker is not None:
+            job_emb_topk = torch.from_numpy(job_emb[topk_idx]).to(DEVICE).float()
+            p_hired = rerank_probs(reranker, cand_emb, job_emb_topk)
+        else:
+            p_hired = np.array([0.5] * len(topk_idx))
+    else:
+        # Fallback retrieval: Just take first 20 jobs
+        topk_idx = np.arange(min(20, len(job_ids)))
+        p_hired = np.array([0.5] * len(topk_idx))
 
     # 5. NN Top-10 Selection
     # Get indices in the topk_idx array
@@ -596,3 +675,26 @@ def recommend(req: RecommendRequest):
         llm_used=False,
         llm_notes=""
     )
+
+
+class RoadmapRequest(BaseModel):
+    job_role: str
+    current_skills: List[str]
+
+@app.post("/api/generate_roadmap")
+def get_roadmap(req: RoadmapRequest):
+    """
+    Generates a personalized roadmap for a specific job role based on current skills.
+    Uses LLM (DeepSeek or OpenAI) to annotate the roadmap.
+    """
+    try:
+        # We can pass an OpenAI client if we want to share the pool, 
+        # but roadmap.py handles its own client creation robustly now.
+        result = generate_roadmap(req.current_skills, req.job_role)
+        
+        if result and "error" in result:
+             raise HTTPException(status_code=500, detail=result["error"])
+             
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

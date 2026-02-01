@@ -6,10 +6,23 @@ import { Button } from '@/app/components/ui/button';
 import { Card } from '@/app/components/ui/card';
 import { Badge } from '@/app/components/ui/badge';
 import { SpreadingActivationViz } from '@/app/components/SpreadingActivationViz';
-import { mockJobs, Job } from '@/app/data/jobsData';
+import { useFormContext, JobResult } from '@/app/context/FormContext';
 
 export function ResultsPage() {
   const navigate = useNavigate();
+  const { state } = useFormContext();
+  const { results: jobs } = state;
+
+  if (!jobs) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-4">No results found</h2>
+          <Button onClick={() => navigate('/')}>Start Over</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50">
@@ -41,7 +54,7 @@ export function ResultsPage() {
             animate={{ opacity: 1 }}
             transition={{ delay: 0.2 }}
           >
-            We have provided <span className="font-semibold text-indigo-600">{mockJobs.length} relevant opportunities</span> based on your profile. Click on any job to see your personalised roadmap.
+            We have provided <span className="font-semibold text-indigo-600">{jobs.length} relevant opportunities</span> based on your profile. Click on any job to see your personalised roadmap.
           </motion.p>
         </div>
 
@@ -49,7 +62,7 @@ export function ResultsPage() {
         <Card className="bg-white/80 backdrop-blur-sm border-gray-200 shadow-xl mb-12">
           <div className="p-8">
             <h2 className="text-xl font-semibold mb-6 text-gray-800">Connection Mapping</h2>
-            <SpreadingActivationViz jobs={mockJobs} />
+            <SpreadingActivationViz jobs={jobs} />
 
             {/* Legend inside the network card */}
             <div className="mt-8 pt-8 border-t border-gray-100 flex flex-wrap justify-center gap-6 text-sm text-gray-600">
@@ -73,7 +86,7 @@ export function ResultsPage() {
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-900 mb-6">Detailed Recommendations</h2>
           <div className="grid md:grid-cols-2 gap-6">
-            {mockJobs.map((job: Job) => (
+            {jobs.map((job: JobResult) => (
               <div
                 key={job.id}
                 className="bg-white rounded-2xl shadow-lg p-6 hover:shadow-xl transition-all cursor-pointer border-2 border-transparent hover:border-indigo-500 group"

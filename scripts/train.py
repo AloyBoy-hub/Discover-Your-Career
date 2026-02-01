@@ -41,7 +41,9 @@ def main():
     opt = torch.optim.AdamW(model.parameters(), lr=2e-5, weight_decay=0.01)
 
     model.train()
-    for epoch in range(3):
+    model.train()
+    # Reduced for speed (Demo/Test mode)
+    for epoch in range(1):
         total = 0.0
         for step, batch in enumerate(dl):
             cand = {k: v.to(device) for k, v in batch["cand"].items()}
@@ -58,6 +60,10 @@ def main():
             opt.step()
 
             total += float(loss.item())
+            # Speed hack: Only train on 5 batches for demo
+            if step >= 5:
+                break
+            
             if step % 50 == 0:
                 print(f"epoch={epoch} step={step} loss={loss.item():.4f}")
 

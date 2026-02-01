@@ -1,4 +1,5 @@
 import { useState, ChangeEvent } from 'react';
+import { useFormContext } from '@/app/context/FormContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Button } from '@/app/components/ui/button';
@@ -63,17 +64,63 @@ const SURVEY_QUESTIONS = [
 
 export function SurveyPage() {
     const navigate = useNavigate();
+    const { state, updateSurveyAnswer, setResults } = useFormContext();
+    const { surveyAnswers: answers } = state;
     const [currentQuestion, setCurrentQuestion] = useState(0);
-    const [answers, setAnswers] = useState<Record<string, string>>({});
     const [direction, setDirection] = useState(0);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const progress = ((currentQuestion + 1) / SURVEY_QUESTIONS.length) * 100;
 
     const handleAnswer = (value: string) => {
-        setAnswers(prev => ({
-            ...prev,
-            [SURVEY_QUESTIONS[currentQuestion].id]: value,
-        }));
+        updateSurveyAnswer(SURVEY_QUESTIONS[currentQuestion].id, value);
+    };
+
+    const handleSubmit = async () => {
+        setIsSubmitting(true);
+        setError(null);
+
+        try {
+            const formData = new FormData();
+
+            // 1. Add CV File if exists
+            if (state.cvFile) {
+                formData.append('cv_file', state.cvFile);
+            }
+
+            // 2. Add CV Text metadata
+            formData.append('cv_text', state.cvText);
+
+            // 3. Add Preferences
+            formData.append('preferences', JSON.stringify(state.preferences));
+
+            // 4. Add Survey Answers
+            formData.append('survey_answers', JSON.stringify(state.surveyAnswers));
+
+            // Standard backend call
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                body: formData,
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to submit assessment. Please try again.');
+            }
+
+            const data = await response.json();
+
+            // Success: save results and navigate to results
+            if (data.results) {
+                setResults(data.results);
+            }
+            navigate('/results');
+        } catch (err) {
+            console.error('Submission error:', err);
+            setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+        } finally {
+            setIsSubmitting(false);
+        }
     };
 
     const goToNext = () => {
@@ -81,9 +128,16 @@ export function SurveyPage() {
             setDirection(1);
             setCurrentQuestion(prev => prev + 1);
         } else if (answers[SURVEY_QUESTIONS[currentQuestion].id]) {
-            // Logic for completion
-            sessionStorage.setItem('surveyAnswers', JSON.stringify(answers));
-            navigate('/results');
+            handleSubmit(); /* 
+            The Frontend "Sends"
+            This function packages all data from FormContext.tsx into a FormData object and 'posts' 
+            it to a specific address (an endpoint like /api/analyze). 
+        
+            The Backend "Receives"
+            We write a function in the backend that is "listening" for that specific package using the endpoint (e.g. /api/analyze).
+        
+            */
+
         }
     };
 
@@ -100,6 +154,14 @@ export function SurveyPage() {
     return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 py-12 px-4">
             <div className="max-w-3xl mx-auto">
+                <Button
+                    variant="ghost"
+                    onClick={() => navigate('/')}
+                    className="mb-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-8 py-4 rounded-2xl shadow-lg shadow-indigo-200 gap-2 transition-all"
+                >
+                    <ChevronLeft className="w-5 h-5" />
+                    Back to Preferences
+                </Button>
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -138,15 +200,22 @@ export function SurveyPage() {
                                         onChange={(e: ChangeEvent<HTMLTextAreaElement>) => handleAnswer(e.target.value)}
                                         placeholder={SURVEY_QUESTIONS[currentQuestion].placeholder}
                                         className="min-h-[200px] text-lg p-6 rounded-2xl border-2 border-gray-100 focus:border-indigo-500 transition-all bg-white shadow-inner"
+                                        disabled={isSubmitting}
                                     />
                                 </motion.div>
                             </AnimatePresence>
+
+                            {error && (
+                                <p className="mt-4 text-red-500 text-center font-semibold">
+                                    {error}
+                                </p>
+                            )}
 
                             <div className="flex items-center justify-between mt-12 pt-8 border-t border-gray-100">
                                 <Button
                                     variant="ghost"
                                     onClick={goToPrevious}
-                                    disabled={currentQuestion === 0}
+                                    disabled={currentQuestion === 0 || isSubmitting}
                                     className="gap-2 font-bold px-6 py-6 rounded-2xl"
                                 >
                                     <ChevronLeft className="w-5 h-5" />
@@ -154,11 +223,24 @@ export function SurveyPage() {
                                 </Button>
                                 <Button
                                     onClick={goToNext}
-                                    disabled={!currentAnswer}
-                                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-10 py-6 rounded-2xl shadow-lg shadow-indigo-200 gap-2 transition-all"
+                                    disabled={!currentAnswer || isSubmitting}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-10 py-6 rounded-2xl shadow-lg shadow-indigo-200 gap-2 transition-all relative overflow-hidden"
                                 >
-                                    {isLastQuestion ? 'Reveal Results' : 'Continue'}
-                                    {!isLastQuestion && <ChevronRight className="w-5 h-5" />}
+                                    {isSubmitting ? (
+                                        <span className="flex items-center gap-2">
+                                            <motion.div
+                                                animate={{ rotate: 360 }}
+                                                transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                                                className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full"
+                                            />
+                                            Analyzing...
+                                        </span>
+                                    ) : (
+                                        <>
+                                            {isLastQuestion ? 'Reveal Results' : 'Continue'}
+                                            {!isLastQuestion && <ChevronRight className="w-5 h-5" />}
+                                        </>
+                                    )}
                                 </Button>
                             </div>
                         </CardContent>

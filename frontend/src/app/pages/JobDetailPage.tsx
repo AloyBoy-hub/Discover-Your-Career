@@ -34,13 +34,83 @@ import {
   AccordionTrigger,
 } from "@/app/components/ui/accordion";
 
-import { mockJobs, getRoadmapForJob, RoadmapStep, RoadmapResource } from '@/app/data/jobsData';
+import { RoadmapStep, RoadmapResource } from '@/app/data/jobsData';
+import { useFormContext } from '@/app/context/FormContext';
 
 export function JobDetailPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const navigate = useNavigate();
+  const { state } = useFormContext();
 
-  const job = mockJobs.find((j) => j.id === jobId);
+  const job = state.results?.find((j) => j.id === jobId);
+  const [roadmap, setRoadmap] = useState<RoadmapStep[]>([]);
+  const [isLoadingRoadmap, setIsLoadingRoadmap] = useState(false);
+
+  useEffect(() => {
+    if (!job) return;
+
+    const fetchRoadmap = async () => {
+      setIsLoadingRoadmap(true);
+      try {
+        // Combine skills from preferences (could also be parsed from CV if available)
+        const skills = [
+          ...state.preferences.techStack,
+          ...state.preferences.confidentSkills
+        ];
+
+        const res = await fetch('/api/generate_roadmap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            job_role: job.title,
+            current_skills: skills
+          })
+        });
+
+        if (!res.ok) throw new Error("Failed to generate roadmap");
+
+        const data = await res.json();
+        const plan = data.learning_plan; // short_term, medium_term, long_term
+
+        // Map backend plan to Frontend RoadmapStep
+        const newSteps: RoadmapStep[] = [
+          {
+            id: 'step1',
+            title: 'Short Term: Foundation',
+            duration: '1-2 Months',
+            description: 'Focus on critical missing skills and immediate gaps.',
+            tasks: plan.short_term?.map((t: any) => t.topic) || [],
+            resources: []
+          },
+          {
+            id: 'step2',
+            title: 'Medium Term: Proficiency',
+            duration: '3-6 Months',
+            description: 'Deepen your knowledge and build practical experience.',
+            tasks: plan.medium_term?.map((t: any) => t.topic) || [],
+            resources: []
+          },
+          {
+            id: 'step3',
+            title: 'Long Term: Mastery',
+            duration: '6+ Months',
+            description: 'Advanced topics and specialization.',
+            tasks: plan.long_term?.map((t: any) => t.topic) || [],
+            resources: []
+          }
+        ];
+        setRoadmap(newSteps);
+      } catch (error) {
+        console.error(error);
+        // Fallback to empty if fail
+        setRoadmap([]);
+      } finally {
+        setIsLoadingRoadmap(false);
+      }
+    };
+
+    fetchRoadmap();
+  }, [job, jobId, state.preferences]);
 
   if (!job) {
     return (
@@ -53,14 +123,20 @@ export function JobDetailPage() {
     );
   }
 
-  const roadmap = getRoadmapForJob(jobId || '');
+  // No longer using static getRoadmapForJob directly
   const [userProgress, setUserProgress] = useState<Record<string, 'not-started' | 'in-progress' | 'completed'>>(() => {
+    // Reset progress when roadmap changes
+    return {};
+  });
+
+  // Effect to init progress once roadmap is loaded
+  useEffect(() => {
     const initialProgress: Record<string, 'not-started' | 'in-progress' | 'completed'> = {};
     roadmap.forEach((step: RoadmapStep) => {
       initialProgress[step.id] = 'not-started';
     });
-    return initialProgress;
-  });
+    setUserProgress(initialProgress);
+  }, [roadmap]);
 
   const updateStageStatus = (stageId: string, status: 'not-started' | 'in-progress' | 'completed') => {
     setUserProgress(prev => ({
@@ -173,6 +249,7 @@ export function JobDetailPage() {
                 </div>
                 <CardDescription className="text-lg ml-11">
                   Step-by-step guide to bridge your skills and land your dream role at {job.company}.
+                  {isLoadingRoadmap && <span className="ml-2 text-sm text-indigo-500 animate-pulse">(Generating personalized plan...)</span>}
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-6">
