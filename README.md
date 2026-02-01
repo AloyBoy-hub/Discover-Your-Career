@@ -78,6 +78,7 @@ The backend is built with FastAPI.
     Create a `.env` file or set variables in your shell:
     ```bash
     export OPENAI_API_KEY="your-api-key-here"
+    export DEEPSEEK_API_KEY="your-deepseek-key-here"
     export ART_DIR="artifacts"
     ```
 
