@@ -11,9 +11,9 @@ import sys
 # Ensure root modules (two_tower, rerank_model, etc.) can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from two_tower import TwoTower
-from rerank_model import Reranker
-from deploy_utils import ensure_dir, save_json, save_npy, encode_job_embeddings
+from backend.ml.two_tower import TwoTower
+from backend.ml.reranker import Reranker
+from backend.utils.io_helpers import ensure_dir, save_json, save_npy, encode_job_embeddings
 
 
 class RerankPairsDataset(Dataset):
@@ -91,7 +91,7 @@ class RerankCollate:
         return {"cand": cand, "job": job, "label": labels}
 
 
-def pick_device():
+def get_torch_device():
     if torch.backends.mps.is_available():
         return "mps"
     if torch.cuda.is_available():
@@ -100,7 +100,7 @@ def pick_device():
 
 
 def main():
-    device = pick_device()
+    device = get_torch_device()
     print("DEVICE =", device)
 
     pairs_df = pd.read_csv("data/pairs.csv")
@@ -134,8 +134,7 @@ def main():
 
     reranker.train()
     reranker.train()
-    # Reduced for speed
-    for epoch in range(1):
+    for epoch in range(3):
         total = 0.0
         for step, batch in enumerate(dl):
             cand = {k: v.to(device) for k, v in batch["cand"].items()}
@@ -155,10 +154,6 @@ def main():
             opt.step()
 
             total += float(loss.item())
-            # Speed hack
-            if step >= 5:
-                break
-
             if step % 50 == 0:
                 print(f"epoch={epoch} step={step} loss={loss.item():.4f}")
 

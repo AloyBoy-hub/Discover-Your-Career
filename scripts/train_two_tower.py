@@ -10,8 +10,8 @@ import os
 # Ensure root modules (data, two_tower) can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from two_tower import TwoTower
-from data import PairDataset, TwoTowerCollate
+from backend.ml.two_tower import TwoTower
+from backend.ml.dataset import PairDataset, TwoTowerCollate
 
 def info_nce_loss(cand_emb: torch.Tensor, job_emb: torch.Tensor, temperature: float = 0.07) -> torch.Tensor:
     logits = cand_emb @ job_emb.T
@@ -42,8 +42,7 @@ def main():
 
     model.train()
     model.train()
-    # Reduced for speed (Demo/Test mode)
-    for epoch in range(1):
+    for epoch in range(3):
         total = 0.0
         for step, batch in enumerate(dl):
             cand = {k: v.to(device) for k, v in batch["cand"].items()}
@@ -60,10 +59,6 @@ def main():
             opt.step()
 
             total += float(loss.item())
-            # Speed hack: Only train on 5 batches for demo
-            if step >= 5:
-                break
-            
             if step % 50 == 0:
                 print(f"epoch={epoch} step={step} loss={loss.item():.4f}")
 

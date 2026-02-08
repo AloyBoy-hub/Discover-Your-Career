@@ -1,4 +1,4 @@
-import React, { useState, ChangeEvent, DragEvent } from 'react';
+import React, { useState, ChangeEvent, DragEvent, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { motion } from 'motion/react';
 import { Upload, FileText, Briefcase, ChevronRight, CheckCircle2 } from 'lucide-react';
@@ -51,7 +51,7 @@ export function UploadPage() {
         <div className="max-w-4xl mx-auto space-y-6">
           {/* CV Input Card - Replaced with Premium File Upload */}
           <div className="mb-6">
-            <FileUpload onFileUpload={handleFileUpload} />
+            <FileUpload onFileUpload={handleFileUpload} initialFile={cvFile} />
           </div>
 
           {/* Career Preferences Form */}
@@ -242,11 +242,16 @@ export function UploadPage() {
 
 interface FileUploadProps {
   onFileUpload: (file: File) => void;
+  initialFile?: File | null;
 }
 
-function FileUpload({ onFileUpload }: FileUploadProps) {
+function FileUpload({ onFileUpload, initialFile }: FileUploadProps) {
   const [dragActive, setDragActive] = useState(false);
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(initialFile || null);
+
+  useEffect(() => {
+    setUploadedFile(initialFile || null);
+  }, [initialFile]);
 
   const handleDrag = (e: DragEvent) => {
     e.preventDefault();

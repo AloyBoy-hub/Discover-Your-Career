@@ -7,6 +7,7 @@ import re
 import sys
 import shutil
 import tempfile
+import difflib
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -18,10 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from transformers import AutoTokenizer
 
-from two_tower import TwoTower
-from rerank_model import Reranker
-from deploy_utils import load_json, load_npy
-from backend.roadmap import generate_roadmap  # Import the function
+from backend.ml.two_tower import TwoTower
+from backend.ml.reranker import Reranker
+from backend.utils.io_helpers import load_json, load_npy
+from backend.services.roadmap_service import generate_roadmap  # Import the function
 
 # Optional: LLM rerank (Stage B)
 try:
@@ -49,12 +50,11 @@ FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 # ============================================================
 # Feature extraction (MATCHES extract_features.py)
 # ============================================================
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from backend.skill_extractor import extract_skills_from_text, SKILL_PATTERNS  # noqa: E402
+from backend.services.skill_service import extract_skills_from_text, SKILL_PATTERNS  # noqa: E402
 
 # Optional resume parser (file upload path)
 try:
-    from backend.resume_parser import parse_resume  # noqa: E402
+    from backend.services.parsing_service import parse_resume  # noqa: E402
 except Exception:
     parse_resume = None
 
@@ -124,7 +124,7 @@ def build_feature_vector(resume_text: str, feature_columns: List[str]) -> np.nda
 # ============================================================
 # Utilities
 # ============================================================
-def pick_device() -> str:
+def get_torch_device() -> str:
     if torch.backends.mps.is_available():
         return "mps"
     if torch.cuda.is_available():
@@ -132,22 +132,23 @@ def pick_device() -> str:
     return "cpu"
 
 
-def make_snippet(text: str, max_chars: int = 320) -> str:
+def format_text_snippet(text: str, max_chars: int = 320) -> str:
     t = (text or "").replace("\n", " ").replace("\r", " ").strip()
     return t[:max_chars]
 
 
-def upper_triangle_abs_diff(values_10: List[float]) -> List[List[float]]:
-    p = np.array(values_10, dtype=np.float32)
-    M = np.zeros((10, 10), dtype=np.float32)
-    for i in range(10):
-        for j in range(i + 1, 10):
+def compute_similarity_matrix(values: List[float]) -> List[List[float]]:
+    n = len(values)
+    p = np.array(values, dtype=np.float32)
+    M = np.zeros((n, n), dtype=np.float32)
+    for i in range(n):
+        for j in range(i + 1, n):
             M[i, j] = abs(float(p[i] - p[j]))
     return M.tolist()
 
 
 @torch.no_grad()
-def encode_candidate_embedding(
+def generate_candidate_embedding(
     tokenizer,
     tower,
     resume_text: str,
@@ -169,7 +170,7 @@ def encode_candidate_embedding(
 
 
 @torch.no_grad()
-def rerank_probs(reranker: Reranker, cand_emb: torch.Tensor, job_emb_topk: torch.Tensor) -> np.ndarray:
+def predict_rerank_scores(reranker: Reranker, cand_emb: torch.Tensor, job_emb_topk: torch.Tensor) -> np.ndarray:
     c = cand_emb.unsqueeze(0).expand(job_emb_topk.size(0), -1)
     p = reranker(c, job_emb_topk)
     p = p.squeeze(-1)
@@ -219,8 +220,15 @@ def llm_rerank_topk(*, user_extra: str, jobs_payload: List[Dict[str, Any]], top_
 
     resp = client.responses.create(
         model=LLM_MODEL,
-        input=[{"role": "user", "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}],
-        text={"format": {"type": "json_schema", "json_schema": schema}},
+        input=[{"role": "user", "content": [{"type": "input_text", "text": json.dumps(payload, ensure_ascii=False)}]}],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": schema["name"],
+                "schema": schema["schema"],
+                "strict": schema["strict"]
+            }
+        },
     )
 
     return json.loads(resp.output_text)
@@ -252,7 +260,7 @@ class RecommendResponse(BaseModel):
 # ============================================================
 # Global cache
 # ============================================================
-DEVICE = pick_device()
+DEVICE = get_torch_device()
 
 jobs_df: Optional[pd.DataFrame] = None
 job_ids: List[str] = []
@@ -300,7 +308,7 @@ async def lifespan(app: FastAPI):
     job_ids = jobs_df["job_id"].astype(str).tolist()
     job_titles = jobs_df["title"].astype(str).tolist() if "title" in jobs_df.columns else [""] * len(job_ids)
     job_texts = jobs_df["job_text"].astype(str).tolist()
-    job_snippets = [make_snippet(t, LLM_SNIPPET_CHARS) for t in job_texts]
+    job_snippets = [format_text_snippet(t, LLM_SNIPPET_CHARS) for t in job_texts]
 
     # Two Tower
     try:
@@ -387,8 +395,8 @@ def root():
     return {"status": "ok", "message": "Go to /docs and use POST /recommend or POST /parse_cv"}
 
 
-@app.post("/parse_cv")
-async def parse_cv(file: UploadFile = File(...)):
+@app.post("/api/v1/parse-resume")
+async def extract_cv_text(file: UploadFile = File(...)):
     """
     Parses a resume file (PDF/DOCX/TXT) and returns the extracted text.
     Used by the frontend to get the text before the survey.
@@ -436,8 +444,8 @@ class RecommendResponse(BaseModel):
     llm_notes: str = ""
 
 
-@app.post("/api/analyze", response_model=RecommendResponse)
-async def analyze_jobs(
+@app.post("/api/v1/assessments", response_model=RecommendResponse)
+async def process_career_assessment(
     cv_file: Optional[UploadFile] = File(None),
     cv_text: str = Form(""),
     preferences: str = Form("{}"),
@@ -482,6 +490,14 @@ async def analyze_jobs(
         location = prefs_dict.get("location") or prefs_dict.get("country")
         if location: survey_context.append(f"Target Location: {location}")
 
+        tech_stack = prefs_dict.get("techStack", [])
+        if tech_stack:
+            survey_context.append(f"Preferred Tech Stack: {', '.join(tech_stack)}")
+            
+        confident_skills = prefs_dict.get("confidentSkills", [])
+        if confident_skills:
+            survey_context.append(f"Skills candidate is confident in: {', '.join(confident_skills)}")
+
     if answers_dict:
         survey_context.append("Candidate survey responses:")
         for q_id, answer in answers_dict.items():
@@ -498,11 +514,11 @@ async def analyze_jobs(
         use_llm_rerank=True
     )
     
-    return recommend(req)
+    return get_job_recommendations(req)
 
 
-@app.post("/recommend", response_model=RecommendResponse)
-def recommend(req: RecommendRequest):
+@app.post("/api/v1/recommendations", response_model=RecommendResponse)
+def get_job_recommendations(req: RecommendRequest):
     if tower is None or reranker is None or job_emb is None or tokenizer is None:
         # Check if we should allow a mock response (hard-coded dummy data)
         if os.getenv("ALLOW_MOCK_RESPONSE", "0") == "1":
@@ -529,7 +545,7 @@ def recommend(req: RecommendRequest):
 
     # 2. Candidate Embedding & Retrieve Top-K (Stage A)
     if tower is not None and job_emb is not None and tokenizer is not None:
-        cand_emb = encode_candidate_embedding(
+        cand_emb = generate_candidate_embedding(
             tokenizer, tower, req.resume_text, cand_feat_vec, DEVICE, max_len=MAX_LEN
         )
 
@@ -542,7 +558,7 @@ def recommend(req: RecommendRequest):
         # 4. Rerank Top-K (Stage B - Model)
         if reranker is not None:
             job_emb_topk = torch.from_numpy(job_emb[topk_idx]).to(DEVICE).float()
-            p_hired = rerank_probs(reranker, cand_emb, job_emb_topk)
+            p_hired = predict_rerank_scores(reranker, cand_emb, job_emb_topk)
         else:
             p_hired = np.array([0.5] * len(topk_idx))
     else:
@@ -550,64 +566,104 @@ def recommend(req: RecommendRequest):
         topk_idx = np.arange(min(20, len(job_ids)))
         p_hired = np.array([0.5] * len(topk_idx))
 
-    # 5. NN Top-10 Selection
-    # Get indices in the topk_idx array
-    nn_order = np.argsort(p_hired)[::-1][:10]
+    # 5. NN Top-10 Selection (Distinct High-Scoring Jobs)
+    # Collect exactly 10 unique jobs from the sorted results pool
+    nn_pool_indices = np.argsort(p_hired)[::-1][:100] # Take a larger pool to find 10 unique
     
-    # Prepare payload for potential LLM reranking OR final output
-    # We need the actual job indices from the global DF
-    global_indices = [int(topk_idx[i]) for i in nn_order]
-    
-    # Construct base results (NN only first)
     top10_tuples = []
     results_list = []
+    seen_content = set()
+    actual_indices_in_pool = [] # Track which pool indices we actually picked
     
-    for idx_in_topk, global_idx in zip(nn_order, global_indices):
-        prob = float(p_hired[idx_in_topk])
+    for i in nn_pool_indices:
+        prob = float(p_hired[i])
+        global_idx = int(topk_idx[i])
         jid = job_ids[global_idx]
         title = job_titles[global_idx]
         text_snippet = job_snippets[global_idx]
         
+        # 1. Normalize
+        norm_title = title.lower().strip()
+        norm_snippet = text_snippet.lower().strip()
+        
+        # 2. Fuzzy Deduplication (Role Title Focus)
+        is_duplicate = False
+        for saved_title in seen_content:
+            # Check Title Similarity - High threshold to catch very similar roles
+            title_ratio = difflib.SequenceMatcher(None, norm_title, saved_title).ratio()
+            if title_ratio > 0.9: 
+                is_duplicate = True
+                break
+        
+        if is_duplicate:
+            continue
+
+        seen_content.add(norm_title)
+        actual_indices_in_pool.append(i)
+
         # Build Tuple
         top10_tuples.append((jid, title, prob))
         
+        # Extract skills for this job
+        job_skills = list(set(extract_skills_from_text(text_snippet)))[:5]
+        
         # Build Rich Result
-        # Since CSV lacks explicit company/location/salary, we use placeholders or simple logic
         res = JobResult(
             id=jid,
             title=title,
-            company="Techfest Partner", # Placeholder
-            location="Singapore",      # Placeholder
-            salaryRange="$5k - $8k",   # Placeholder
+            company="Techfest Partner",
+            location="Singapore",
+            salaryRange="$5k - $10k", # Generic range
             description=text_snippet,
             matchScore=round(prob * 100, 1),
-            skillsRequired=["Python", "Data"] # Placeholder or extract from text
+            skillsRequired=job_skills
         )
         results_list.append(res)
+        
+        if len(results_list) >= 10:
+            break
 
     valid_job_ids = [r.id for r in results_list]
-    rel_matrix = upper_triangle_abs_diff([p * 100 for p in p_hired[nn_order]]) # Scaled? Or pure prob? utility func uses raw.
-    # Actually utility uses raw. Let's stick to raw for retrieval metrics, but 0-100 for UI.
+    # rel_matrix will be calculated at the end based on final results_list
     
     # 6. LLM Reranking (Optional)
     use_llm = req.use_llm_rerank and req.extra_info and req.extra_info.strip() and llm_available()
     
     if use_llm:
-        # Prepare payload for LLM from the Top-K (not just Top-10, maybe Top-20? Logic used Top-K index)
-        # The previous code sent entire Top-K (e.g. 50? 200?) to LLM? usually expensive. 
-        # Previous code: `for pos, j in enumerate(topk_idx):` -> sends ALL K candidates. 
-        # If K=200, that's too many. Let's cap at 20.
-        
-        llm_subset_indices = np.argsort(p_hired)[::-1][:20] # Take top 20 from NN
+        # Prepare payload for LLM from the Top-K (Distinct ones)
+        llm_pool_indices = np.argsort(p_hired)[::-1][:100] 
         jobs_payload = []
-        for i in llm_subset_indices:
+        llm_seen = set()
+        
+        for i in llm_pool_indices:
             jj = int(topk_idx[i])
+            title = job_titles[jj].lower().strip()
+            snippet = job_snippets[jj]
+            
+            if title in llm_seen:
+                continue
+            
+            # Check fuzzy title similarity for the LLM pool as well
+            llm_duplicate = False
+            for saved_llm_title in llm_seen:
+                if difflib.SequenceMatcher(None, title, saved_llm_title).ratio() > 0.9:
+                    llm_duplicate = True
+                    break
+            
+            if llm_duplicate:
+                continue
+
+            llm_seen.add(title)
+            
             jobs_payload.append({
                 "job_id": job_ids[jj],
-                "title": job_titles[jj],
-                "snippet": job_snippets[jj],
+                "title": title,
+                "snippet": snippet,
                 "nn_prob": float(p_hired[i])
             })
+            
+            if len(jobs_payload) >= 20: # Send top 20 UNIQUE jobs to LLM
+                break
             
         try:
             llm_res = llm_rerank_topk(
@@ -628,13 +684,15 @@ def recommend(req: RecommendRequest):
             for rid in ranked_ids:
                 if rid in lookup:
                     j_data = lookup[rid]
-                    # We use the ORIGINAL nn_prob for match score visual, or strict 100? 
-                    # Usually keep NN score but reorder. 
-                    # Or use preference_score from LLM if available?
-                    # The UI expects matchScore. Let's use NN prob for now to be safe, or average.
+                    # Note: We don't need seen_content check here because 
+                    # jobs_payload was already deduplicated before sending to LLM.
                     prob = j_data["nn_prob"]
                     
                     new_tuples.append((rid, j_data["title"], prob))
+                    
+                    # Extract skills for this job
+                    job_skills = list(set(extract_skills_from_text(j_data["snippet"])))[:5]
+                    
                     new_results.append(JobResult(
                         id=rid,
                         title=j_data["title"],
@@ -643,18 +701,33 @@ def recommend(req: RecommendRequest):
                         salaryRange="$5k - $12k",
                         description=j_data["snippet"],
                         matchScore=round(prob * 100, 1),
-                        skillsRequired=[]
+                        skillsRequired=job_skills
                     ))
             
             # If we have results, override
             if new_results:
+                # GUARANTEE: If LLM returned < 10, top up with original NN results
+                if len(new_results) < 10:
+                    seen_ids = {r.id for r in new_results}
+                    seen_titles = {r.title.lower().strip() for r in new_results}
+                    
+                    for original_res in results_list:
+                        if original_res.id not in seen_ids and original_res.title.lower().strip() not in seen_titles:
+                            new_results.append(original_res)
+                            new_tuples.append((original_res.id, original_res.title, original_res.matchScore / 100.0))
+                            seen_ids.add(original_res.id)
+                            seen_titles.add(original_res.title.lower().strip())
+                        if len(new_results) >= 10:
+                            break
+
                 results_list = new_results
                 top10_tuples = new_tuples
                 valid_job_ids = [r.id for r in results_list]
+                final_scores = [r.matchScore for r in results_list]
                 return RecommendResponse(
                     top10=top10_tuples,
                     ranked_job_ids=valid_job_ids,
-                    relative_matrix=rel_matrix, # kept based on NN
+                    relative_matrix=compute_similarity_matrix(final_scores),
                     results=results_list,
                     device=DEVICE,
                     llm_used=True,
@@ -666,10 +739,11 @@ def recommend(req: RecommendRequest):
             # Fallback to NN results (already in results_list)
 
     # Return NN results (either fallback or LLM disabled)
+    final_scores = [r.matchScore for r in results_list]
     return RecommendResponse(
         top10=top10_tuples,
         ranked_job_ids=valid_job_ids,
-        relative_matrix=rel_matrix,
+        relative_matrix=compute_similarity_matrix(final_scores),
         results=results_list,
         device=DEVICE,
         llm_used=False,
@@ -681,7 +755,7 @@ class RoadmapRequest(BaseModel):
     job_role: str
     current_skills: List[str]
 
-@app.post("/api/generate_roadmap")
+@app.post("/api/v1/roadmap")
 def get_roadmap(req: RoadmapRequest):
     """
     Generates a personalized roadmap for a specific job role based on current skills.

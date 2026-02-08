@@ -99,7 +99,7 @@ export function SurveyPage() {
             formData.append('survey_answers', JSON.stringify(state.surveyAnswers));
 
             // Standard backend call
-            const response = await fetch('/api/analyze', {
+            const response = await fetch('/api/v1/assessments', {
                 method: 'POST',
                 body: formData,
             });

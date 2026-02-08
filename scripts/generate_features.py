@@ -11,7 +11,7 @@ from typing import Dict, List
 # Ensure backend module can be imported
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from backend.skill_extractor import extract_skills_from_text, SKILL_PATTERNS  # noqa: E402
+from backend.services.skill_service import extract_skills_from_text, SKILL_PATTERNS  # noqa: E402
 
 # Your majors list (multi-valued)
 MAJORS = [

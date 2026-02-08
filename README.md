@@ -3,7 +3,7 @@
 This repository hosts the backend and AI models for a Career Roadmapper, a system designed to match candidates with jobs using a Two-Tower embedding model and LLM-based reranking.
 
 ## Components
-- **FastAPI Backend**: `app.py` servces as the main entry point, handling model predictions and resume parsing.
+- **FastAPI Backend**: `backend/app/main.py` serves as the main entry point, handling model predictions and resume parsing.
 - **Frontend**: A React/Vite application located in the `frontend/` directory.
 - **AI Models**:
   - **Stage A**: Two-Tower Model (BERT-based) for retrieving top candidates.
@@ -104,7 +104,7 @@ The backend is built with FastAPI.
 
 5.  **Run the Server**:
     ```bash
-    uvicorn app:app --host 0.0.0.0 --port 8000
+    uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
     ```
     The API will be live at `http://localhost:8000`.
 
@@ -145,8 +145,11 @@ For a full production deployment:
 *   **Reverse Proxy**: Configure Nginx (or similar) to route API requests (e.g., `/api`) to the backend and serve the frontend assets for other routes.
 
 ## Directory Structure
-- `app.py`: Main API entry point.
-- `backend/`: Core logic for resume parsing, roadmap generation, and model utilities.
+- `backend/`: Core application logic.
+  - `app/`: FastAPI application and routing (`main.py`).
+  - `services/`: Business logic (parsing, roadmap, skills).
+  - `ml/`: Model definitions and datasets (Two-Tower, Reranker).
+  - `utils/`: Common helpers.
 - `frontend/`: React application source code.
 - `artifacts/`: Directory for model weights and configuration files.
 - `data/`: Dataset storage (e.g., `jobs.csv`).

@@ -5,8 +5,13 @@ import pandas as pd
 import torch
 from transformers import AutoTokenizer
 
-from two_tower import TwoTower
-from rerank_model import Reranker
+import os
+import sys
+# Ensure root modules (backend, etc.) can be imported
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend.ml.two_tower import TwoTower
+from backend.ml.reranker import Reranker
 
 SKILLS = [
     "python","java","c++","javascript","typescript","go","sql",
@@ -16,7 +21,7 @@ SKILLS = [
     "git","linux","excel",
 ]
 
-def pick_device():
+def get_torch_device():
     if torch.backends.mps.is_available():
         return "mps"
     if torch.cuda.is_available():
@@ -57,7 +62,7 @@ def build_feature_vector(resume_text: str, feature_columns: list[str]) -> np.nda
         values[f"skill_{s}"] = 1.0 if s in t else 0.0
     return np.array([values.get(col, 0.0) for col in feature_columns], dtype=np.float32)
 
-def upper_triangle_abs_diff(probs_10: list[float]) -> list[list[float]]:
+def compute_similarity_matrix(probs_10: list[float]) -> list[list[float]]:
     p = np.array(probs_10, dtype=np.float32)
     M = np.zeros((10, 10), dtype=np.float32)
     for i in range(10):
@@ -92,7 +97,7 @@ def rerank_probs(reranker, cand_emb, job_emb_topk, device):
     return p.detach().cpu().numpy()
 
 def recommend_for_one(resume_text: str, top_k_retrieve: int = 200):
-    device = pick_device()
+    device = get_torch_device()
     print("DEVICE =", device)
     model_name = "distilbert-base-uncased"
 
@@ -143,7 +148,7 @@ def recommend_for_one(resume_text: str, top_k_retrieve: int = 200):
         top10.append((job_ids[j], job_titles[j], prob))
         probs_10.append(prob)
 
-    rel_matrix = upper_triangle_abs_diff(probs_10)
+    rel_matrix = compute_similarity_matrix(probs_10)
 
     return top10, rel_matrix
 

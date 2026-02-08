@@ -58,7 +58,7 @@ export function JobDetailPage() {
           ...state.preferences.confidentSkills
         ];
 
-        const res = await fetch('/api/generate_roadmap', {
+        const res = await fetch('/api/v1/roadmap', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

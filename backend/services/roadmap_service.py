@@ -24,7 +24,11 @@ ROLE_MAPPING = {
     "ai data scientist": "ai-data-scientist",
     "data scientist": "ai-data-scientist",
     "machine learning": "ai-data-scientist",
+    "machine learning": "ai-data-scientist",
     "ux design": "ux-design",
+    "ui design": "ux-design",
+    "ui designer": "ux-design",
+    "product designer": "ux-design",
     "react": "react" 
 }
 
